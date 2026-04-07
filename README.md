@@ -64,6 +64,18 @@ Prompt Dock will use the same core stack as Swift Slots, with only the pieces th
 
 Prompt Dock does not need unrelated tools from other projects. Mapbox, marketplace features, analytics tooling, CRM integrations, and other extras are out unless a concrete product requirement appears.
 
+## Current Build Status
+
+The current codebase now includes:
+
+- free local prompt storage in the extension side panel
+- prompt folders, tags, search, duplicate, delete, and injection flows
+- page-based extension navigation for Library, Editor, and Account
+- Supabase-backed personal auth and cloud sync inside the extension
+- local cache fallback for the authenticated personal library
+
+Billing, team libraries, invites, and Resend delivery are still planned rather than complete.
+
 ## Architecture Summary
 
 Prompt Dock is not a dashboard-first SaaS. The extension is the product. A small hosted Next.js support app exists only for responsibilities that should not live inside the extension itself, such as:
@@ -102,8 +114,14 @@ The repository will follow the same local development model as Swift Slots:
 - `supabase start`
 - `supabase db push`
 - `npm run dev`
+- `npm run extension:build`
+- `npm run test`
 
 Those commands describe the intended development workflow once the codebase is scaffolded. Backend changes should remain migrations-first, and the extension should be developed against local Supabase services before anything is pushed to hosted infrastructure.
+
+For extension cloud sync, the extension UI reads the same `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` values as the Next.js app. If those values are missing, the extension stays in local-only mode.
+
+The Chrome action now opens the Prompt Dock side panel directly. Load the unpacked extension from `dist/extension`, click the toolbar icon, and use the side panel as the main app surface.
 
 ## Product Principle
 

@@ -2,10 +2,11 @@ node_modules
 .next
 dist
 dist-extension
+.run-logs/
 .env.local
 .env.*.local
 coverage
 *.log
+*.tsbuildinfo
 supabase/.branches
 supabase/.temp
-

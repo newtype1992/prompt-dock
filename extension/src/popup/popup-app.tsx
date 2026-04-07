@@ -1,22 +1,26 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PRODUCT_NAME } from "@/lib/product/config";
-import { getActiveSiteSummary, injectPromptFromPopup } from "../lib/injection";
 import {
-  createEmptyPromptDraft,
-  createFolder,
-  createPromptRecord,
-  draftFromPrompt,
-  duplicatePromptRecord,
-  getLocalLibrary,
-  saveLocalLibrary,
-  updatePromptRecord,
-} from "../lib/storage";
+  createFolderForCurrentMode,
+  deletePromptForCurrentMode,
+  duplicatePromptForCurrentMode,
+  loadPopupLibraryState,
+  refreshCloudLibrary,
+  savePromptForCurrentMode,
+  signInWithPassword,
+  signOutFromCloud,
+  signUpWithPassword,
+  type PopupLibraryState,
+} from "../lib/cloud-sync";
+import { getActiveSiteSummary, injectPromptFromPopup } from "../lib/injection";
+import { createEmptyPromptDraft, draftFromPrompt } from "../lib/storage";
 import type { LocalPromptLibrary, PromptDraft, PromptRecord } from "../lib/types";
+import { NoticeBanner, PageNavButton, type PopupNotice } from "./components";
+import { AccountPage } from "./pages/account-page";
+import { EditorPage } from "./pages/editor-page";
+import { LibraryPage } from "./pages/library-page";
 
-type PopupNotice = {
-  tone: "success" | "info" | "error";
-  message: string;
-};
+type DockPage = "library" | "editor" | "account";
 
 export default function App() {
   const [library, setLibrary] = useState<LocalPromptLibrary | null>(null);
@@ -31,44 +35,190 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [injectingPromptId, setInjectingPromptId] = useState<string | null>(null);
+  const [cloudConfigured, setCloudConfigured] = useState(false);
+  const [libraryMode, setLibraryMode] = useState<"local" | "cloud">("local");
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [accountEmail, setAccountEmail] = useState<string | null>(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authIntent, setAuthIntent] = useState<"signIn" | "signUp">("signIn");
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const [isRefreshingCloud, setIsRefreshingCloud] = useState(false);
+  const [page, setPage] = useState<DockPage>(() => getPageFromHash());
+  const activeFolderIdRef = useRef(activeFolderId);
+  const editingPromptIdRef = useRef(editingPromptId);
 
   useEffect(() => {
-    void loadPopupData();
+    activeFolderIdRef.current = activeFolderId;
+  }, [activeFolderId]);
+
+  useEffect(() => {
+    editingPromptIdRef.current = editingPromptId;
+  }, [editingPromptId]);
+
+  useEffect(() => {
+    if (!window.location.hash) {
+      window.history.replaceState(null, "", getHashForPage("library"));
+    }
+
+    const handleHashChange = () => {
+      setPage(getPageFromHash());
+    };
+
+    window.addEventListener("hashchange", handleHashChange);
+    handleHashChange();
+
+    return () => {
+      window.removeEventListener("hashchange", handleHashChange);
+    };
   }, []);
 
-  async function loadPopupData() {
-    const [nextLibrary, nextSiteSummary] = await Promise.all([getLocalLibrary(), getActiveSiteSummary()]);
+  const applyPopupLibraryState = useCallback((nextState: PopupLibraryState, preferredPromptId?: string | null) => {
+    const currentActiveFolderId = activeFolderIdRef.current;
+    const currentEditingPromptId = editingPromptIdRef.current;
 
-    setLibrary(nextLibrary);
-    setSiteLabel(nextSiteSummary.label);
-    setSiteSupported(nextSiteSummary.supported);
+    setLibrary(nextState.library);
+    setCloudConfigured(nextState.cloudConfigured);
+    setLibraryMode(nextState.mode);
+    setLastSyncedAt(nextState.lastSyncedAt);
+    setAccountEmail(nextState.account?.email ?? null);
 
-    const nextPrompt = sortPromptRecords(nextLibrary.prompts)[0];
+    const folderStillExists =
+      currentActiveFolderId === "all" ||
+      nextState.library.folders.some((folder) => folder.id === currentActiveFolderId);
+
+    if (!folderStillExists) {
+      setActiveFolderId("all");
+    }
+
+    const nextPrompt =
+      (preferredPromptId ? nextState.library.prompts.find((prompt) => prompt.id === preferredPromptId) : null) ??
+      (currentEditingPromptId ? nextState.library.prompts.find((prompt) => prompt.id === currentEditingPromptId) : null) ??
+      sortPromptRecords(nextState.library.prompts)[0];
 
     if (nextPrompt) {
       setEditingPromptId(nextPrompt.id);
       setDraft(draftFromPrompt(nextPrompt));
-    } else {
-      setEditingPromptId(null);
-      setDraft(createEmptyPromptDraft());
+      return;
     }
 
-    setIsLoading(false);
-  }
+    setEditingPromptId(null);
+    setDraft(createEmptyPromptDraft(currentActiveFolderId === "all" ? null : currentActiveFolderId));
+  }, []);
 
-  async function persistLibrary(nextLibrary: LocalPromptLibrary) {
-    setLibrary(nextLibrary);
-    await saveLocalLibrary(nextLibrary);
-  }
+  const loadPopupData = useCallback(async (preferredPromptId?: string | null) => {
+    setIsLoading(true);
+
+    try {
+      const [nextState, nextSiteSummary] = await Promise.all([loadPopupLibraryState(), getActiveSiteSummary()]);
+
+      applyPopupLibraryState(nextState, preferredPromptId);
+      setSiteLabel(nextSiteSummary.label);
+      setSiteSupported(nextSiteSummary.supported);
+
+      if (nextState.syncNotice) {
+        setNotice({
+          tone: "info",
+          message: nextState.syncNotice,
+        });
+      }
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The side panel could not be loaded.",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [applyPopupLibraryState]);
+
+  useEffect(() => {
+    void loadPopupData();
+  }, [loadPopupData]);
 
   function selectPrompt(prompt: PromptRecord) {
     setEditingPromptId(prompt.id);
     setDraft(draftFromPrompt(prompt));
+    navigateToPage("editor", setPage);
   }
 
   function beginCreatePrompt() {
     setEditingPromptId(null);
     setDraft(createEmptyPromptDraft(activeFolderId === "all" ? null : activeFolderId));
+    navigateToPage("editor", setPage);
+  }
+
+  async function handleAuthSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!authEmail.trim() || !authPassword.trim()) {
+      setNotice({
+        tone: "error",
+        message: "Email and password are required for cloud auth.",
+      });
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+
+    try {
+      const result =
+        authIntent === "signIn"
+          ? await signInWithPassword(authEmail.trim(), authPassword)
+          : await signUpWithPassword(authEmail.trim(), authPassword);
+
+      setNotice({
+        tone: result.ok ? "success" : "error",
+        message: result.message,
+      });
+
+      if (result.state) {
+        applyPopupLibraryState(result.state);
+        setAuthPassword("");
+      }
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function handleSignOut() {
+    setIsAuthSubmitting(true);
+
+    try {
+      const nextState = await signOutFromCloud();
+      applyPopupLibraryState(nextState);
+      setNotice({
+        tone: "info",
+        message: "Signed out. Prompt Dock is back in local-only mode.",
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Sign-out failed.",
+      });
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function handleRefreshCloud() {
+    setIsRefreshingCloud(true);
+
+    try {
+      const nextState = await refreshCloudLibrary();
+      applyPopupLibraryState(nextState);
+      setNotice({
+        tone: "success",
+        message: nextState.mode === "cloud" ? "Cloud library refreshed." : "Local library refreshed.",
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The library could not be refreshed.",
+      });
+    } finally {
+      setIsRefreshingCloud(false);
+    }
   }
 
   async function handleSavePrompt(event: React.FormEvent<HTMLFormElement>) {
@@ -88,48 +238,33 @@ export default function App() {
 
     setIsSaving(true);
 
-    if (editingPromptId) {
-      const existingPrompt = library.prompts.find((prompt) => prompt.id === editingPromptId);
+    try {
+      const result = await savePromptForCurrentMode({
+        currentLibrary: library,
+        draft,
+        editingPromptId,
+      });
 
-      if (!existingPrompt) {
-        setNotice({
-          tone: "error",
-          message: "The selected prompt could not be found.",
-        });
-        setIsSaving(false);
-        return;
-      }
-
-      const updatedPrompt = updatePromptRecord(existingPrompt, draft);
-      const nextLibrary = {
-        ...library,
-        prompts: library.prompts.map((prompt) => (prompt.id === existingPrompt.id ? updatedPrompt : prompt)),
-      };
-
-      await persistLibrary(nextLibrary);
-      setDraft(draftFromPrompt(updatedPrompt));
+      applyPopupLibraryState(result.state, result.promptId);
       setNotice({
         tone: "success",
-        message: "Prompt updated locally.",
+        message:
+          result.state.mode === "cloud"
+            ? editingPromptId
+              ? "Prompt saved to cloud sync."
+              : "Prompt created in cloud sync."
+            : editingPromptId
+              ? "Prompt updated locally."
+              : "Prompt created locally.",
       });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The prompt could not be saved.",
+      });
+    } finally {
       setIsSaving(false);
-      return;
     }
-
-    const nextPrompt = createPromptRecord(draft);
-    const nextLibrary = {
-      ...library,
-      prompts: [nextPrompt, ...library.prompts],
-    };
-
-    await persistLibrary(nextLibrary);
-    setEditingPromptId(nextPrompt.id);
-    setDraft(draftFromPrompt(nextPrompt));
-    setNotice({
-      tone: "success",
-      message: "Prompt created locally.",
-    });
-    setIsSaving(false);
   }
 
   async function handleCreateFolder(event: React.FormEvent<HTMLFormElement>) {
@@ -149,9 +284,7 @@ export default function App() {
       return;
     }
 
-    const duplicateFolder = library.folders.find(
-      (folder) => folder.name.toLowerCase() === folderName.toLowerCase()
-    );
+    const duplicateFolder = library.folders.find((folder) => folder.name.toLowerCase() === folderName.toLowerCase());
 
     if (duplicateFolder) {
       setActiveFolderId(duplicateFolder.id);
@@ -167,23 +300,33 @@ export default function App() {
       return;
     }
 
-    const nextFolder = createFolder(folderName);
-    const nextLibrary = {
-      ...library,
-      folders: [...library.folders, nextFolder].sort((left, right) => left.name.localeCompare(right.name)),
-    };
+    try {
+      const result = await createFolderForCurrentMode(folderName, library);
+      const createdFolder =
+        result.state.library.folders.find((folder) => folder.name.toLowerCase() === folderName.toLowerCase()) ?? null;
 
-    await persistLibrary(nextLibrary);
-    setNewFolderName("");
-    setActiveFolderId(nextFolder.id);
-    setDraft((currentDraft) => ({
-      ...currentDraft,
-      folderId: nextFolder.id,
-    }));
-    setNotice({
-      tone: "success",
-      message: `Folder "${nextFolder.name}" created.`,
-    });
+      applyPopupLibraryState(result.state);
+      setNewFolderName("");
+
+      if (createdFolder) {
+        setActiveFolderId(createdFolder.id);
+        setDraft((currentDraft) => ({
+          ...currentDraft,
+          folderId: createdFolder.id,
+        }));
+      }
+
+      setNotice({
+        tone: "success",
+        message:
+          result.state.mode === "cloud" ? `Folder "${folderName}" created in cloud sync.` : `Folder "${folderName}" created.`,
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The folder could not be created.",
+      });
+    }
   }
 
   async function handleDeletePrompt(promptId: string) {
@@ -197,32 +340,23 @@ export default function App() {
       return;
     }
 
-    if (!window.confirm(`Delete "${prompt.title}" from local storage?`)) {
+    if (!window.confirm(`Delete "${prompt.title}" from ${libraryMode === "cloud" ? "cloud sync" : "local storage"}?`)) {
       return;
     }
 
-    const nextPrompts = library.prompts.filter((item) => item.id !== promptId);
-    const nextLibrary = {
-      ...library,
-      prompts: nextPrompts,
-    };
-
-    await persistLibrary(nextLibrary);
-
-    const nextSelectedPrompt = sortPromptRecords(nextPrompts)[0];
-
-    if (nextSelectedPrompt) {
-      setEditingPromptId(nextSelectedPrompt.id);
-      setDraft(draftFromPrompt(nextSelectedPrompt));
-    } else {
-      setEditingPromptId(null);
-      setDraft(createEmptyPromptDraft(activeFolderId === "all" ? null : activeFolderId));
+    try {
+      const nextState = await deletePromptForCurrentMode(promptId, library);
+      applyPopupLibraryState(nextState);
+      setNotice({
+        tone: "success",
+        message: nextState.mode === "cloud" ? "Prompt deleted from cloud sync." : "Prompt deleted from local storage.",
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The prompt could not be deleted.",
+      });
     }
-
-    setNotice({
-      tone: "success",
-      message: "Prompt deleted from local storage.",
-    });
   }
 
   async function handleDuplicatePrompt(promptId: string) {
@@ -236,19 +370,20 @@ export default function App() {
       return;
     }
 
-    const nextPrompt = duplicatePromptRecord(prompt);
-    const nextLibrary = {
-      ...library,
-      prompts: [nextPrompt, ...library.prompts],
-    };
-
-    await persistLibrary(nextLibrary);
-    setEditingPromptId(nextPrompt.id);
-    setDraft(draftFromPrompt(nextPrompt));
-    setNotice({
-      tone: "success",
-      message: `Duplicated "${prompt.title}".`,
-    });
+    try {
+      const result = await duplicatePromptForCurrentMode(prompt, library);
+      applyPopupLibraryState(result.state, result.promptId);
+      setNotice({
+        tone: "success",
+        message:
+          result.state.mode === "cloud" ? `Duplicated "${prompt.title}" in cloud sync.` : `Duplicated "${prompt.title}".`,
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The prompt could not be duplicated.",
+      });
+    }
   }
 
   async function handleInjectPrompt(prompt: PromptRecord) {
@@ -263,7 +398,7 @@ export default function App() {
 
   if (isLoading || !library) {
     return (
-      <div className="flex min-h-[560px] items-center justify-center p-6 text-sm text-slate-600">
+      <div className="flex min-h-screen items-center justify-center p-6 text-sm text-slate-600">
         Loading Prompt Dock...
       </div>
     );
@@ -283,19 +418,27 @@ export default function App() {
     })
   );
 
+  const accountSignedIn = Boolean(accountEmail);
+  const selectedPrompt = editingPromptId ? library.prompts.find((prompt) => prompt.id === editingPromptId) ?? null : null;
+
   return (
-    <div className="flex min-h-[640px] flex-col gap-4 p-4 text-slate-900">
+    <div className="flex min-h-screen flex-col gap-4 p-4 text-slate-900">
       <section className="rounded-[28px] border border-slate-200/70 bg-white/90 p-5 shadow-[0_20px_48px_-34px_rgba(28,42,66,0.45)]">
         <div className="flex items-start justify-between gap-3">
           <div className="space-y-2">
-            <div className="inline-flex rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-700">
-              Free local mode
+            <div
+              className={`inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] ${
+                libraryMode === "cloud"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-cyan-200 bg-cyan-50 text-cyan-700"
+              }`}
+            >
+              {libraryMode === "cloud" ? "Personal cloud sync" : "Free local mode"}
             </div>
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">{PRODUCT_NAME}</h1>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                Save reusable prompts locally, organize them by folder and tags, and inject them into supported AI
-                tools.
+                Prompt Dock now uses page-based navigation inside the extension side panel.
               </p>
             </div>
           </div>
@@ -313,331 +456,89 @@ export default function App() {
 
       {notice ? <NoticeBanner notice={notice} /> : null}
 
-      <section className="rounded-[26px] border border-slate-200/70 bg-white/85 p-4 shadow-[0_18px_40px_-34px_rgba(28,42,66,0.4)]">
-        <div className="space-y-4">
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Search prompts</span>
-            <input
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search by title, description, body, or tag"
-              className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-300 focus:bg-white"
-            />
-          </label>
+      <nav className="grid grid-cols-3 gap-2 rounded-[24px] border border-slate-200/70 bg-white/85 p-2 shadow-[0_18px_40px_-34px_rgba(28,42,66,0.4)]">
+        <PageNavButton
+          active={page === "library"}
+          description={`${library.prompts.length} prompts`}
+          label="Library"
+          onClick={() => navigateToPage("library", setPage)}
+        />
+        <PageNavButton
+          active={page === "editor"}
+          description={editingPromptId ? "Active draft" : "Create prompt"}
+          label="Editor"
+          onClick={() => navigateToPage("editor", setPage)}
+        />
+        <PageNavButton
+          active={page === "account"}
+          description={accountSignedIn ? "Signed in" : "Local mode"}
+          label="Account"
+          onClick={() => navigateToPage("account", setPage)}
+        />
+      </nav>
 
-          <form className="space-y-3" onSubmit={handleCreateFolder}>
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Folders</p>
-              <button
-                type="button"
-                onClick={() => setActiveFolderId("all")}
-                className="text-xs font-medium text-slate-500 transition hover:text-slate-800"
-              >
-                Clear filter
-              </button>
-            </div>
+      {page === "library" ? (
+        <LibraryPage
+          activeFolderId={activeFolderId}
+          injectingPromptId={injectingPromptId}
+          library={library}
+          libraryMode={libraryMode}
+          newFolderName={newFolderName}
+          searchTerm={searchTerm}
+          selectedPromptId={editingPromptId}
+          visiblePrompts={visiblePrompts}
+          onBeginCreatePrompt={beginCreatePrompt}
+          onChangeNewFolderName={setNewFolderName}
+          onChangeSearchTerm={setSearchTerm}
+          onClearFilter={() => setActiveFolderId("all")}
+          onCreateFolder={(event) => void handleCreateFolder(event)}
+          onDeletePrompt={(promptId) => void handleDeletePrompt(promptId)}
+          onDuplicatePrompt={(promptId) => void handleDuplicatePrompt(promptId)}
+          onGoToAccount={() => navigateToPage("account", setPage)}
+          onInjectPrompt={(prompt) => void handleInjectPrompt(prompt)}
+          onSelectFolder={setActiveFolderId}
+          onSelectPrompt={selectPrompt}
+        />
+      ) : null}
 
-            <div className="flex flex-wrap gap-2">
-              <FolderChip
-                active={activeFolderId === "all"}
-                label={`All prompts (${library.prompts.length})`}
-                onClick={() => setActiveFolderId("all")}
-              />
-              {library.folders.map((folder) => (
-                <FolderChip
-                  key={folder.id}
-                  active={activeFolderId === folder.id}
-                  label={`${folder.name} (${countPromptsInFolder(library.prompts, folder.id)})`}
-                  onClick={() => setActiveFolderId(folder.id)}
-                />
-              ))}
-            </div>
+      {page === "editor" ? (
+        <EditorPage
+          draft={draft}
+          editingPromptId={editingPromptId}
+          isSaving={isSaving}
+          library={library}
+          libraryMode={libraryMode}
+          selectedPrompt={selectedPrompt}
+          onBeginCreatePrompt={beginCreatePrompt}
+          onChangeDraft={setDraft}
+          onDeletePrompt={(promptId) => void handleDeletePrompt(promptId)}
+          onDuplicatePrompt={(promptId) => void handleDuplicatePrompt(promptId)}
+          onGoToAccount={() => navigateToPage("account", setPage)}
+          onGoToLibrary={() => navigateToPage("library", setPage)}
+          onSavePrompt={(event) => void handleSavePrompt(event)}
+        />
+      ) : null}
 
-            <div className="flex gap-2">
-              <input
-                value={newFolderName}
-                onChange={(event) => setNewFolderName(event.target.value)}
-                placeholder="Add a folder"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-300 focus:bg-white"
-              />
-              <button
-                type="submit"
-                className="rounded-2xl border border-slate-900 bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-              >
-                Add
-              </button>
-            </div>
-          </form>
-        </div>
-      </section>
-
-      <section className="grid gap-4">
-        <div className="rounded-[26px] border border-slate-200/70 bg-white/85 p-4 shadow-[0_18px_40px_-34px_rgba(28,42,66,0.4)]">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Library</p>
-              <h2 className="mt-1 text-lg font-semibold">Saved prompts</h2>
-            </div>
-            <button
-              type="button"
-              onClick={beginCreatePrompt}
-              className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-2 text-sm font-semibold text-cyan-700 transition hover:border-cyan-300 hover:bg-cyan-100"
-            >
-              New prompt
-            </button>
-          </div>
-
-          <div className="mt-4 grid max-h-[280px] gap-3 overflow-y-auto pr-1">
-            {visiblePrompts.length ? (
-              visiblePrompts.map((prompt) => (
-                <PromptCard
-                  key={prompt.id}
-                  folderName={library.folders.find((folder) => folder.id === prompt.folderId)?.name ?? "No folder"}
-                  isInjecting={injectingPromptId === prompt.id}
-                  isSelected={editingPromptId === prompt.id}
-                  prompt={prompt}
-                  onDelete={() => void handleDeletePrompt(prompt.id)}
-                  onDuplicate={() => void handleDuplicatePrompt(prompt.id)}
-                  onEdit={() => selectPrompt(prompt)}
-                  onInject={() => void handleInjectPrompt(prompt)}
-                />
-              ))
-            ) : (
-              <div className="rounded-[24px] border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm leading-6 text-slate-600">
-                {library.prompts.length
-                  ? "No prompts match the current search and folder filters."
-                  : "Your local library is empty. Create a prompt to start injecting reusable text into AI tools."}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <form
-          className="rounded-[26px] border border-slate-200/70 bg-white/85 p-4 shadow-[0_18px_40px_-34px_rgba(28,42,66,0.4)]"
-          onSubmit={(event) => void handleSavePrompt(event)}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Editor</p>
-              <h2 className="mt-1 text-lg font-semibold">
-                {editingPromptId ? "Edit local prompt" : "Create local prompt"}
-              </h2>
-            </div>
-            <button
-              type="button"
-              onClick={beginCreatePrompt}
-              className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 transition hover:text-slate-800"
-            >
-              Reset form
-            </button>
-          </div>
-
-          <div className="mt-4 grid gap-4">
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Title</span>
-              <input
-                value={draft.title}
-                onChange={(event) => setDraft((currentDraft) => ({ ...currentDraft, title: event.target.value }))}
-                placeholder="Prompt title"
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-300 focus:bg-white"
-              />
-            </label>
-
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Description</span>
-              <input
-                value={draft.description}
-                onChange={(event) =>
-                  setDraft((currentDraft) => ({ ...currentDraft, description: event.target.value }))
-                }
-                placeholder="What is this prompt for?"
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-300 focus:bg-white"
-              />
-            </label>
-
-            <div className="grid gap-4 sm:grid-cols-[1fr_1fr]">
-              <label className="block">
-                <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Folder</span>
-                <select
-                  value={draft.folderId ?? ""}
-                  onChange={(event) =>
-                    setDraft((currentDraft) => ({
-                      ...currentDraft,
-                      folderId: event.target.value || null,
-                    }))
-                  }
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-300 focus:bg-white"
-                >
-                  <option value="">No folder</option>
-                  {library.folders.map((folder) => (
-                    <option key={folder.id} value={folder.id}>
-                      {folder.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Tags</span>
-                <input
-                  value={draft.tagsInput}
-                  onChange={(event) => setDraft((currentDraft) => ({ ...currentDraft, tagsInput: event.target.value }))}
-                  placeholder="research, writing, outreach"
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-300 focus:bg-white"
-                />
-              </label>
-            </div>
-
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Prompt body</span>
-              <textarea
-                value={draft.body}
-                onChange={(event) => setDraft((currentDraft) => ({ ...currentDraft, body: event.target.value }))}
-                placeholder="Write the reusable prompt text here."
-                rows={7}
-                className="mt-2 w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-cyan-300 focus:bg-white"
-              />
-            </label>
-
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs leading-5 text-slate-500">
-                This prompt stays in local extension storage until paid sync is added to your account.
-              </p>
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="rounded-2xl border border-slate-900 bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSaving ? "Saving..." : editingPromptId ? "Save changes" : "Create prompt"}
-              </button>
-            </div>
-          </div>
-        </form>
-      </section>
+      {page === "account" ? (
+        <AccountPage
+          accountEmail={accountEmail}
+          authEmail={authEmail}
+          authIntent={authIntent}
+          authPassword={authPassword}
+          cloudConfigured={cloudConfigured}
+          isAuthSubmitting={isAuthSubmitting}
+          isRefreshingCloud={isRefreshingCloud}
+          lastSyncedAt={lastSyncedAt}
+          libraryMode={libraryMode}
+          onChangeAuthEmail={setAuthEmail}
+          onChangeAuthIntent={setAuthIntent}
+          onChangeAuthPassword={setAuthPassword}
+          onRefreshCloud={() => void handleRefreshCloud()}
+          onSignOut={() => void handleSignOut()}
+          onSubmitAuth={(event) => void handleAuthSubmit(event)}
+        />
+      ) : null}
     </div>
-  );
-}
-
-function NoticeBanner({ notice }: { notice: PopupNotice }) {
-  const toneClass =
-    notice.tone === "success"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-      : notice.tone === "error"
-        ? "border-rose-200 bg-rose-50 text-rose-800"
-        : "border-amber-200 bg-amber-50 text-amber-800";
-
-  return <div className={`rounded-[22px] border px-4 py-3 text-sm font-medium ${toneClass}`}>{notice.message}</div>;
-}
-
-function FolderChip({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${
-        active
-          ? "border-slate-900 bg-slate-900 text-white"
-          : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function PromptCard({
-  folderName,
-  isInjecting,
-  isSelected,
-  prompt,
-  onDelete,
-  onDuplicate,
-  onEdit,
-  onInject,
-}: {
-  folderName: string;
-  isInjecting: boolean;
-  isSelected: boolean;
-  prompt: PromptRecord;
-  onDelete: () => void;
-  onDuplicate: () => void;
-  onEdit: () => void;
-  onInject: () => void;
-}) {
-  return (
-    <article
-      className={`rounded-[24px] border p-4 transition ${
-        isSelected ? "border-cyan-300 bg-cyan-50/60" : "border-slate-200 bg-slate-50/85 hover:bg-white"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="space-y-2">
-          <h3 className="text-sm font-semibold text-slate-900">{prompt.title}</h3>
-          <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">{folderName}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onInject}
-          disabled={isInjecting}
-          className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-semibold text-cyan-700 transition hover:border-cyan-300 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isInjecting ? "Using..." : "Use"}
-        </button>
-      </div>
-
-      <p className="mt-3 text-sm leading-6 text-slate-600">
-        {prompt.description || "No description yet. This prompt will still inject correctly."}
-      </p>
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        {prompt.tags.length ? (
-          prompt.tags.map((tag) => (
-            <span
-              key={tag}
-              className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500"
-            >
-              {tag}
-            </span>
-          ))
-        ) : (
-          <span className="rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-            No tags
-          </span>
-        )}
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={onEdit}
-          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300"
-        >
-          Edit
-        </button>
-        <button
-          type="button"
-          onClick={onDuplicate}
-          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300"
-        >
-          Duplicate
-        </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100"
-        >
-          Delete
-        </button>
-      </div>
-    </article>
   );
 }
 
@@ -667,6 +568,27 @@ function promptMatchesSearch(prompt: PromptRecord, searchTerm: string) {
   return haystack.includes(query);
 }
 
-function countPromptsInFolder(prompts: PromptRecord[], folderId: string) {
-  return prompts.filter((prompt) => prompt.folderId === folderId).length;
+function getPageFromHash(): DockPage {
+  const hash = window.location.hash.replace(/^#\/?/, "");
+
+  if (hash === "editor" || hash === "account") {
+    return hash;
+  }
+
+  return "library";
+}
+
+function getHashForPage(page: DockPage) {
+  return `#/${page}`;
+}
+
+function navigateToPage(page: DockPage, setPage: (page: DockPage) => void) {
+  const nextHash = getHashForPage(page);
+
+  if (window.location.hash !== nextHash) {
+    window.location.hash = nextHash;
+    return;
+  }
+
+  setPage(page);
 }

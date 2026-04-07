@@ -1,6 +1,8 @@
 import type { LocalPromptLibrary, PromptDraft, PromptFolder, PromptRecord } from "./types";
 
 const LOCAL_LIBRARY_KEY = "promptDock.localLibrary.v1";
+const CLOUD_LIBRARY_CACHE_KEY = "promptDock.cloudLibraryCache.v1";
+const CLOUD_SYNC_METADATA_KEY = "promptDock.cloudSyncMetadata.v1";
 
 const DEFAULT_LIBRARY: LocalPromptLibrary = {
   version: 1,
@@ -53,6 +55,16 @@ const DEFAULT_LIBRARY: LocalPromptLibrary = {
   ],
 };
 
+type CloudLibraryCacheRecord = {
+  library: LocalPromptLibrary;
+  cachedAt: string;
+};
+
+type CloudSyncMetadataRecord = {
+  importedLocalAt: string | null;
+  lastSyncedAt: string | null;
+};
+
 export function createEmptyPromptDraft(folderId: string | null = null): PromptDraft {
   return {
     title: "",
@@ -88,6 +100,55 @@ export async function getLocalLibrary(): Promise<LocalPromptLibrary> {
 export async function saveLocalLibrary(library: LocalPromptLibrary) {
   await chrome.storage.local.set({
     [LOCAL_LIBRARY_KEY]: library,
+  });
+}
+
+export async function getCloudLibraryCache(userId: string): Promise<LocalPromptLibrary | null> {
+  const stored = await chrome.storage.local.get(CLOUD_LIBRARY_CACHE_KEY);
+  const cacheMap = stored[CLOUD_LIBRARY_CACHE_KEY] as Record<string, CloudLibraryCacheRecord> | undefined;
+  const cachedLibrary = cacheMap?.[userId];
+
+  if (!cachedLibrary) {
+    return null;
+  }
+
+  return structuredClone(cachedLibrary.library);
+}
+
+export async function saveCloudLibraryCache(userId: string, library: LocalPromptLibrary) {
+  const stored = await chrome.storage.local.get(CLOUD_LIBRARY_CACHE_KEY);
+  const cacheMap = (stored[CLOUD_LIBRARY_CACHE_KEY] as Record<string, CloudLibraryCacheRecord> | undefined) ?? {};
+
+  cacheMap[userId] = {
+    library,
+    cachedAt: new Date().toISOString(),
+  };
+
+  await chrome.storage.local.set({
+    [CLOUD_LIBRARY_CACHE_KEY]: cacheMap,
+  });
+}
+
+export async function getCloudSyncMetadata(userId: string): Promise<CloudSyncMetadataRecord> {
+  const stored = await chrome.storage.local.get(CLOUD_SYNC_METADATA_KEY);
+  const metadataMap = stored[CLOUD_SYNC_METADATA_KEY] as Record<string, CloudSyncMetadataRecord> | undefined;
+
+  return (
+    metadataMap?.[userId] ?? {
+      importedLocalAt: null,
+      lastSyncedAt: null,
+    }
+  );
+}
+
+export async function saveCloudSyncMetadata(userId: string, metadata: CloudSyncMetadataRecord) {
+  const stored = await chrome.storage.local.get(CLOUD_SYNC_METADATA_KEY);
+  const metadataMap = (stored[CLOUD_SYNC_METADATA_KEY] as Record<string, CloudSyncMetadataRecord> | undefined) ?? {};
+
+  metadataMap[userId] = metadata;
+
+  await chrome.storage.local.set({
+    [CLOUD_SYNC_METADATA_KEY]: metadataMap,
   });
 }
 
@@ -149,4 +210,3 @@ export function normalizeTags(value: string) {
     )
   );
 }
-
