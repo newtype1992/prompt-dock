@@ -5,6 +5,10 @@ export type SupabaseRuntimeConfig = {
   url: string;
 };
 
+export type SupportAppRuntimeConfig = {
+  url: string;
+};
+
 export function resolveSupabaseRuntimeConfig(
   env: Record<string, string | undefined>
 ): SupabaseRuntimeConfig {
@@ -25,5 +29,15 @@ export function resolveSupabaseRuntimeConfig(
     configured: missing.length === 0,
     missing,
     url,
+  };
+}
+
+export function resolveSupportAppRuntimeConfig(
+  env: Record<string, string | undefined>
+): SupportAppRuntimeConfig {
+  const configuredUrl = env.NEXT_PUBLIC_APP_URL?.trim() ?? env.APP_URL?.trim() ?? "http://localhost:3000";
+
+  return {
+    url: configuredUrl.replace(/\/$/, ""),
   };
 }

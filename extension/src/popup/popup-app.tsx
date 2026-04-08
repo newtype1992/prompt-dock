@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  isActiveSubscriptionStatus,
+  type SubscriptionPlanKey,
+  type SubscriptionStatus,
+} from "@/lib/billing/subscriptions";
 import { PRODUCT_NAME } from "@/lib/product/config";
+import { startBillingFlow } from "../lib/billing";
 import {
   createFolderForCurrentMode,
   deletePromptForCurrentMode,
@@ -39,10 +45,14 @@ export default function App() {
   const [libraryMode, setLibraryMode] = useState<"local" | "cloud">("local");
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
+  const [billingStatus, setBillingStatus] = useState<SubscriptionStatus | null>(null);
+  const [billingPlanKey, setBillingPlanKey] = useState<SubscriptionPlanKey | null>(null);
+  const [billingCurrentPeriodEnd, setBillingCurrentPeriodEnd] = useState<string | null>(null);
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authIntent, setAuthIntent] = useState<"signIn" | "signUp">("signIn");
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const [isBillingSubmitting, setIsBillingSubmitting] = useState(false);
   const [isRefreshingCloud, setIsRefreshingCloud] = useState(false);
   const [page, setPage] = useState<DockPage>(() => getPageFromHash());
   const activeFolderIdRef = useRef(activeFolderId);
@@ -82,6 +92,9 @@ export default function App() {
     setLibraryMode(nextState.mode);
     setLastSyncedAt(nextState.lastSyncedAt);
     setAccountEmail(nextState.account?.email ?? null);
+    setBillingStatus(nextState.billing.status);
+    setBillingPlanKey(nextState.billing.planKey);
+    setBillingCurrentPeriodEnd(nextState.billing.currentPeriodEnd);
 
     const folderStillExists =
       currentActiveFolderId === "all" ||
@@ -219,6 +232,76 @@ export default function App() {
     } finally {
       setIsRefreshingCloud(false);
     }
+  }
+
+  async function handleOpenCheckout() {
+    setIsBillingSubmitting(true);
+
+    try {
+      const flowResult = await startBillingFlow("checkout");
+      const nextState = await refreshCloudStateAfterBillingReturn(flowResult.status);
+      applyPopupLibraryState(nextState);
+      setNotice({
+        tone: nextState.mode === "cloud" ? "success" : flowResult.status === "canceled" ? "info" : "info",
+        message: getBillingNoticeMessage(flowResult.status, nextState),
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The upgrade flow could not be started.",
+      });
+    } finally {
+      setIsBillingSubmitting(false);
+    }
+  }
+
+  async function handleOpenBillingPortal() {
+    setIsBillingSubmitting(true);
+
+    try {
+      const flowResult = await startBillingFlow("portal");
+      const nextState = await refreshCloudStateAfterBillingReturn(flowResult.status);
+      applyPopupLibraryState(nextState);
+      setNotice({
+        tone: "success",
+        message:
+          flowResult.status === "portal"
+            ? "Billing settings refreshed."
+            : nextState.mode === "cloud"
+              ? "Cloud billing is still active."
+              : "Billing status refreshed.",
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The billing portal could not be opened.",
+      });
+    } finally {
+      setIsBillingSubmitting(false);
+    }
+  }
+
+  async function refreshCloudStateAfterBillingReturn(returnStatus: "success" | "canceled" | "portal" | null) {
+    if (returnStatus !== "success") {
+      return refreshCloudLibrary();
+    }
+
+    let latestState = await refreshCloudLibrary();
+
+    if (latestState.billing.planKey === "individual" && isActiveSubscriptionStatus(latestState.billing.status)) {
+      return latestState;
+    }
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await wait(1200);
+      latestState = await refreshCloudLibrary();
+
+      if (latestState.billing.planKey === "individual" && isActiveSubscriptionStatus(latestState.billing.status)) {
+        return latestState;
+      }
+    }
+
+    return latestState;
   }
 
   async function handleSavePrompt(event: React.FormEvent<HTMLFormElement>) {
@@ -525,14 +608,20 @@ export default function App() {
           authEmail={authEmail}
           authIntent={authIntent}
           authPassword={authPassword}
+          billingCurrentPeriodEnd={billingCurrentPeriodEnd}
+          billingPlanKey={billingPlanKey}
+          billingStatus={billingStatus}
           cloudConfigured={cloudConfigured}
           isAuthSubmitting={isAuthSubmitting}
+          isBillingSubmitting={isBillingSubmitting}
           isRefreshingCloud={isRefreshingCloud}
           lastSyncedAt={lastSyncedAt}
           libraryMode={libraryMode}
           onChangeAuthEmail={setAuthEmail}
           onChangeAuthIntent={setAuthIntent}
           onChangeAuthPassword={setAuthPassword}
+          onOpenBillingPortal={() => void handleOpenBillingPortal()}
+          onOpenCheckout={() => void handleOpenCheckout()}
           onRefreshCloud={() => void handleRefreshCloud()}
           onSignOut={() => void handleSignOut()}
           onSubmitAuth={(event) => void handleAuthSubmit(event)}
@@ -591,4 +680,31 @@ function navigateToPage(page: DockPage, setPage: (page: DockPage) => void) {
   }
 
   setPage(page);
+}
+
+function getBillingNoticeMessage(
+  returnStatus: "success" | "canceled" | "portal" | null,
+  nextState: PopupLibraryState
+) {
+  if (nextState.billing.planKey === "individual" && isActiveSubscriptionStatus(nextState.billing.status)) {
+    return nextState.mode === "cloud"
+      ? "Individual billing is active. Personal cloud sync is ready."
+      : "Individual billing is active. Cloud sync will switch on after the next successful refresh.";
+  }
+
+  if (returnStatus === "canceled") {
+    return "Checkout was canceled. Prompt Dock is staying in local mode.";
+  }
+
+  if (returnStatus === "success") {
+    return "Checkout completed, but billing is not active yet. Refresh again in a moment if Stripe is still processing.";
+  }
+
+  return "Billing status refreshed.";
+}
+
+function wait(durationMs: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, durationMs);
+  });
 }

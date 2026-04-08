@@ -21,4 +21,26 @@ describe("Prompt Dock scaffold", () => {
 
     assert.equal(existsSync(migrationPath), true);
   });
+
+  it("includes the billing gating migration", () => {
+    const migrationPath = resolve(
+      process.cwd(),
+      "supabase",
+      "migrations",
+      "20260407000100_add_subscription_gating.sql"
+    );
+
+    assert.equal(existsSync(migrationPath), true);
+  });
+
+  it("includes the subscription uniqueness migration", () => {
+    const migrationPath = resolve(
+      process.cwd(),
+      "supabase",
+      "migrations",
+      "20260407000200_add_subscription_uniqueness.sql"
+    );
+
+    assert.equal(existsSync(migrationPath), true);
+  });
 });

@@ -72,9 +72,11 @@ The current codebase now includes:
 - prompt folders, tags, search, duplicate, delete, and injection flows
 - page-based extension navigation for Library, Editor, and Account
 - Supabase-backed personal auth and cloud sync inside the extension
+- Stripe webhook-backed subscription persistence plus paid personal sync gating
+- Stripe Checkout and Billing Portal launch points from the extension account page
 - local cache fallback for the authenticated personal library
 
-Billing, team libraries, invites, and Resend delivery are still planned rather than complete.
+Team libraries, invites, and Resend delivery are still planned rather than complete.
 
 ## Architecture Summary
 
@@ -120,6 +122,8 @@ The repository will follow the same local development model as Swift Slots:
 Those commands describe the intended development workflow once the codebase is scaffolded. Backend changes should remain migrations-first, and the extension should be developed against local Supabase services before anything is pushed to hosted infrastructure.
 
 For extension cloud sync, the extension UI reads the same `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` values as the Next.js app. If those values are missing, the extension stays in local-only mode.
+
+For billing flows, the extension also reads `NEXT_PUBLIC_APP_URL` so it can call the hosted support app for Stripe Checkout and Billing Portal sessions.
 
 The Chrome action now opens the Prompt Dock side panel directly. Load the unpacked extension from `dist/extension`, click the toolbar icon, and use the side panel as the main app surface.
 

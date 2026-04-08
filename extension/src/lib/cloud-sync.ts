@@ -1,4 +1,9 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
+import {
+  isActiveSubscriptionStatus,
+  type SubscriptionPlanKey,
+  type SubscriptionStatus,
+} from "@/lib/billing/subscriptions";
 import { mapRemoteLibraryRowsToLocalLibrary, shouldImportLocalLibrary, type RemoteFolderRow, type RemotePromptRow } from "./cloud-mappers";
 import {
   createFolder,
@@ -21,8 +26,15 @@ type AccountSummary = {
   userId: string;
 };
 
+export type PersonalBillingSummary = {
+  currentPeriodEnd: string | null;
+  planKey: SubscriptionPlanKey | null;
+  status: SubscriptionStatus | null;
+};
+
 export type PopupLibraryState = {
   account: AccountSummary | null;
+  billing: PersonalBillingSummary;
   cloudConfigured: boolean;
   lastSyncedAt: string | null;
   library: LocalPromptLibrary;
@@ -52,6 +64,11 @@ type CloudContext = {
   user: User;
 };
 
+type SignedInBillingContext = {
+  billing: PersonalBillingSummary;
+  cloudContext: CloudContext;
+};
+
 export async function loadPopupLibraryState(): Promise<PopupLibraryState> {
   const runtimeConfig = getSupabaseRuntimeConfig();
   const localLibrary = await getLocalLibrary();
@@ -59,6 +76,7 @@ export async function loadPopupLibraryState(): Promise<PopupLibraryState> {
   if (!runtimeConfig.configured) {
     return {
       account: null,
+      billing: createEmptyPersonalBillingSummary(),
       cloudConfigured: false,
       lastSyncedAt: null,
       library: localLibrary,
@@ -67,11 +85,12 @@ export async function loadPopupLibraryState(): Promise<PopupLibraryState> {
     };
   }
 
-  const cloudContext = await getCloudContext();
+  const signedInBillingContext = await getSignedInBillingContext();
 
-  if (!cloudContext) {
+  if (!signedInBillingContext) {
     return {
       account: null,
+      billing: createEmptyPersonalBillingSummary(),
       cloudConfigured: true,
       lastSyncedAt: null,
       library: localLibrary,
@@ -80,10 +99,20 @@ export async function loadPopupLibraryState(): Promise<PopupLibraryState> {
     };
   }
 
+  const { billing, cloudContext } = signedInBillingContext;
   const cachedLibrary = await getCloudLibraryCache(cloudContext.user.id);
   const syncMetadata = await getCloudSyncMetadata(cloudContext.user.id);
 
   try {
+    if (!hasActivePersonalPlan(billing)) {
+      return createLocalPopupState(localLibrary, {
+        account: cloudContext.summary,
+        billing,
+        cloudConfigured: true,
+        syncNotice: getPersonalPlanGateNotice(billing),
+      });
+    }
+
     let remoteLibrary = await loadPersonalCloudLibrary(cloudContext.client, cloudContext.user.id);
     let importedLocalAt = syncMetadata.importedLocalAt;
 
@@ -103,6 +132,7 @@ export async function loadPopupLibraryState(): Promise<PopupLibraryState> {
 
     return {
       account: cloudContext.summary,
+      billing,
       cloudConfigured: true,
       lastSyncedAt,
       library: remoteLibrary,
@@ -113,6 +143,7 @@ export async function loadPopupLibraryState(): Promise<PopupLibraryState> {
     if (cachedLibrary) {
       return {
         account: cloudContext.summary,
+        billing,
         cloudConfigured: true,
         lastSyncedAt: syncMetadata.lastSyncedAt,
         library: cachedLibrary,
@@ -123,6 +154,7 @@ export async function loadPopupLibraryState(): Promise<PopupLibraryState> {
 
     return {
       account: cloudContext.summary,
+      billing,
       cloudConfigured: true,
       lastSyncedAt: syncMetadata.lastSyncedAt,
       library: localLibrary,
@@ -216,9 +248,9 @@ export async function refreshCloudLibrary() {
 }
 
 export async function createFolderForCurrentMode(name: string, currentLibrary: LocalPromptLibrary) {
-  const cloudContext = await getCloudContext();
+  const signedInBillingContext = await getSignedInBillingContext();
 
-  if (!cloudContext) {
+  if (!signedInBillingContext || !hasActivePersonalPlan(signedInBillingContext.billing)) {
     const nextFolder = createFolder(name);
     const nextLibrary = {
       ...currentLibrary,
@@ -228,10 +260,15 @@ export async function createFolderForCurrentMode(name: string, currentLibrary: L
     await saveLocalLibrary(nextLibrary);
 
     return {
-      state: createLocalPopupState(nextLibrary),
+      state: createLocalPopupState(nextLibrary, {
+        account: signedInBillingContext?.cloudContext.summary ?? null,
+        billing: signedInBillingContext?.billing ?? createEmptyPersonalBillingSummary(),
+        cloudConfigured: getSupabaseRuntimeConfig().configured,
+      }),
     };
   }
 
+  const { cloudContext } = signedInBillingContext;
   const personalLibrary = await getPersonalLibraryRecord(cloudContext.client, cloudContext.user.id);
 
   const { error } = await cloudContext.client.from("folders").insert({
@@ -258,9 +295,9 @@ export async function savePromptForCurrentMode({
   draft: PromptDraft;
   editingPromptId: string | null;
 }): Promise<SavePromptResult> {
-  const cloudContext = await getCloudContext();
+  const signedInBillingContext = await getSignedInBillingContext();
 
-  if (!cloudContext) {
+  if (!signedInBillingContext || !hasActivePersonalPlan(signedInBillingContext.billing)) {
     if (editingPromptId) {
       const existingPrompt = currentLibrary.prompts.find((prompt) => prompt.id === editingPromptId);
 
@@ -278,7 +315,11 @@ export async function savePromptForCurrentMode({
 
       return {
         promptId: updatedPrompt.id,
-        state: createLocalPopupState(nextLibrary),
+        state: createLocalPopupState(nextLibrary, {
+          account: signedInBillingContext?.cloudContext.summary ?? null,
+          billing: signedInBillingContext?.billing ?? createEmptyPersonalBillingSummary(),
+          cloudConfigured: getSupabaseRuntimeConfig().configured,
+        }),
       };
     }
 
@@ -292,10 +333,15 @@ export async function savePromptForCurrentMode({
 
     return {
       promptId: nextPrompt.id,
-      state: createLocalPopupState(nextLibrary),
+      state: createLocalPopupState(nextLibrary, {
+        account: signedInBillingContext?.cloudContext.summary ?? null,
+        billing: signedInBillingContext?.billing ?? createEmptyPersonalBillingSummary(),
+        cloudConfigured: getSupabaseRuntimeConfig().configured,
+      }),
     };
   }
 
+  const { cloudContext } = signedInBillingContext;
   const personalLibrary = await getPersonalLibraryRecord(cloudContext.client, cloudContext.user.id);
 
   if (editingPromptId) {
@@ -347,9 +393,9 @@ export async function savePromptForCurrentMode({
 }
 
 export async function deletePromptForCurrentMode(promptId: string, currentLibrary: LocalPromptLibrary) {
-  const cloudContext = await getCloudContext();
+  const signedInBillingContext = await getSignedInBillingContext();
 
-  if (!cloudContext) {
+  if (!signedInBillingContext || !hasActivePersonalPlan(signedInBillingContext.billing)) {
     const nextLibrary = {
       ...currentLibrary,
       prompts: currentLibrary.prompts.filter((prompt) => prompt.id !== promptId),
@@ -358,10 +404,15 @@ export async function deletePromptForCurrentMode(promptId: string, currentLibrar
     await saveLocalLibrary(nextLibrary);
 
     return {
-      ...createLocalPopupState(nextLibrary),
+      ...createLocalPopupState(nextLibrary, {
+        account: signedInBillingContext?.cloudContext.summary ?? null,
+        billing: signedInBillingContext?.billing ?? createEmptyPersonalBillingSummary(),
+        cloudConfigured: getSupabaseRuntimeConfig().configured,
+      }),
     };
   }
 
+  const { cloudContext } = signedInBillingContext;
   const { error } = await cloudContext.client.from("prompts").delete().eq("id", promptId);
 
   if (error) {
@@ -372,9 +423,9 @@ export async function deletePromptForCurrentMode(promptId: string, currentLibrar
 }
 
 export async function duplicatePromptForCurrentMode(prompt: PromptRecord, currentLibrary: LocalPromptLibrary): Promise<DuplicatePromptResult> {
-  const cloudContext = await getCloudContext();
+  const signedInBillingContext = await getSignedInBillingContext();
 
-  if (!cloudContext) {
+  if (!signedInBillingContext || !hasActivePersonalPlan(signedInBillingContext.billing)) {
     const nextPrompt = duplicatePromptRecord(prompt);
     const nextLibrary = {
       ...currentLibrary,
@@ -385,10 +436,15 @@ export async function duplicatePromptForCurrentMode(prompt: PromptRecord, curren
 
     return {
       promptId: nextPrompt.id,
-      state: createLocalPopupState(nextLibrary),
+      state: createLocalPopupState(nextLibrary, {
+        account: signedInBillingContext?.cloudContext.summary ?? null,
+        billing: signedInBillingContext?.billing ?? createEmptyPersonalBillingSummary(),
+        cloudConfigured: getSupabaseRuntimeConfig().configured,
+      }),
     };
   }
 
+  const { cloudContext } = signedInBillingContext;
   const personalLibrary = await getPersonalLibraryRecord(cloudContext.client, cloudContext.user.id);
   const nextPrompt = duplicatePromptRecord(prompt);
   const { data, error } = await cloudContext.client
@@ -435,6 +491,27 @@ async function getCloudContext(): Promise<CloudContext | null> {
     client,
     summary: summarizeUser(session.user),
     user: session.user,
+  };
+}
+
+async function getSignedInBillingContext(): Promise<SignedInBillingContext | null> {
+  const cloudContext = await getCloudContext();
+
+  if (!cloudContext) {
+    return null;
+  }
+
+  let billing = createEmptyPersonalBillingSummary();
+
+  try {
+    billing = await loadPersonalBillingSummary(cloudContext.client, cloudContext.user.id);
+  } catch {
+    billing = createEmptyPersonalBillingSummary();
+  }
+
+  return {
+    billing,
+    cloudContext,
   };
 }
 
@@ -536,13 +613,71 @@ function summarizeUser(user: User): AccountSummary {
   };
 }
 
-function createLocalPopupState(library: LocalPromptLibrary): PopupLibraryState {
+async function loadPersonalBillingSummary(client: SupabaseClient, userId: string): Promise<PersonalBillingSummary> {
+  const { data, error } = await client
+    .from("subscriptions")
+    .select("plan_key, status, current_period_end")
+    .eq("scope", "individual")
+    .eq("profile_id", userId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{
+      current_period_end: string | null;
+      plan_key: SubscriptionPlanKey;
+      status: SubscriptionStatus;
+    }>();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
   return {
-    account: null,
-    cloudConfigured: getSupabaseRuntimeConfig().configured,
+    currentPeriodEnd: data?.current_period_end ?? null,
+    planKey: data?.plan_key ?? null,
+    status: data?.status ?? null,
+  };
+}
+
+function createEmptyPersonalBillingSummary(): PersonalBillingSummary {
+  return {
+    currentPeriodEnd: null,
+    planKey: null,
+    status: null,
+  };
+}
+
+function hasActivePersonalPlan(billing: PersonalBillingSummary) {
+  return billing.planKey === "individual" && isActiveSubscriptionStatus(billing.status);
+}
+
+function getPersonalPlanGateNotice(billing: PersonalBillingSummary) {
+  if (!billing.status) {
+    return "Cloud sync requires an active individual plan. Using local storage for now.";
+  }
+
+  return `Your individual plan is ${formatSubscriptionStatus(billing.status)}. Cloud sync stays in local mode until it becomes active.`;
+}
+
+function formatSubscriptionStatus(status: SubscriptionStatus) {
+  return status.replaceAll("_", " ");
+}
+
+function createLocalPopupState(
+  library: LocalPromptLibrary,
+  options?: {
+    account?: AccountSummary | null;
+    billing?: PersonalBillingSummary;
+    cloudConfigured?: boolean;
+    syncNotice?: string | null;
+  }
+): PopupLibraryState {
+  return {
+    account: options?.account ?? null,
+    billing: options?.billing ?? createEmptyPersonalBillingSummary(),
+    cloudConfigured: options?.cloudConfigured ?? getSupabaseRuntimeConfig().configured,
     lastSyncedAt: null,
     library,
     mode: "local",
-    syncNotice: null,
+    syncNotice: options?.syncNotice ?? null,
   };
 }
