@@ -1,7 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { resolveSupabaseRuntimeConfig } from "./runtime-config";
 
-const runtimeConfig = resolveSupabaseRuntimeConfig(import.meta.env as Record<string, string | undefined>);
+const runtimeConfig = resolveSupabaseRuntimeConfig(getRuntimeEnv());
 
 let supabaseClient: SupabaseClient | null | undefined;
 
@@ -26,4 +26,11 @@ export function getExtensionSupabaseClient() {
   }
 
   return supabaseClient;
+}
+
+function getRuntimeEnv() {
+  return ((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {}) as Record<
+    string,
+    string | undefined
+  >;
 }

@@ -6,6 +6,8 @@ export type PromptFolder = {
 
 export type TeamRole = "owner" | "admin" | "member";
 
+export type TeamInviteRole = Exclude<TeamRole, "owner">;
+
 export type WorkspaceKind = "personal" | "team";
 
 export type WorkspaceMode = "local" | "cloud";
@@ -40,6 +42,16 @@ export type PromptWorkspace = {
   mode: WorkspaceMode;
   role: TeamRole | null;
   teamId: string | null;
+};
+
+export type TeamInviteSummary = {
+  createdAt: string;
+  email: string;
+  expiresAt: string;
+  id: string;
+  inviteUrl: string;
+  role: TeamInviteRole;
+  token: string;
 };
 
 export type PromptDraft = {

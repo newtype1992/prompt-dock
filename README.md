@@ -77,8 +77,10 @@ The current codebase now includes:
 - local cache fallback for the authenticated personal library
 - team creation plus personal/team workspace switching inside the extension
 - owner-managed Stripe launch points for team billing
+- team invite creation in the extension plus invite acceptance by link or token
+- hosted invite pages that resolve real invite details and hand users into the extension flow
 
-Team invites and Resend delivery are still planned rather than complete.
+Resend delivery for invites and account notifications is still planned rather than complete.
 
 ## Architecture Summary
 

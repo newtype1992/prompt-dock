@@ -1,7 +1,7 @@
 import { getExtensionSupabaseClient } from "./supabase";
 import { resolveSupportAppRuntimeConfig } from "./runtime-config";
 
-const supportAppRuntimeConfig = resolveSupportAppRuntimeConfig(import.meta.env as Record<string, string | undefined>);
+const supportAppRuntimeConfig = resolveSupportAppRuntimeConfig(getRuntimeEnv());
 
 export type BillingReturnStatus = "success" | "canceled" | "portal";
 
@@ -166,4 +166,11 @@ function getBillingReturnStatus(value: string | null): BillingReturnStatus | nul
   } catch {
     return null;
   }
+}
+
+function getRuntimeEnv() {
+  return ((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {}) as Record<
+    string,
+    string | undefined
+  >;
 }

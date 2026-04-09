@@ -8,6 +8,7 @@ import { PRODUCT_NAME } from "@/lib/product/config";
 import { startBillingFlow } from "../lib/billing";
 import {
   createFolderForCurrentMode,
+  createInviteForActiveTeamWorkspace,
   createTeamWorkspace,
   deletePromptForCurrentMode,
   duplicatePromptForCurrentMode,
@@ -18,11 +19,12 @@ import {
   signOutFromCloud,
   signUpWithPassword,
   switchWorkspace,
+  acceptInviteFromInput,
   type PopupLibraryState,
 } from "../lib/cloud-sync";
 import { getActiveSiteSummary, injectPromptFromPopup } from "../lib/injection";
 import { createEmptyPromptDraft, draftFromPrompt } from "../lib/storage";
-import type { LocalPromptLibrary, PromptDraft, PromptRecord, PromptWorkspace } from "../lib/types";
+import type { LocalPromptLibrary, PromptDraft, PromptRecord, PromptWorkspace, TeamInviteRole, TeamInviteSummary } from "../lib/types";
 import { NoticeBanner, PageNavButton, type PopupNotice } from "./components";
 import { AccountPage } from "./pages/account-page";
 import { EditorPage } from "./pages/editor-page";
@@ -34,12 +36,16 @@ export default function App() {
   const [library, setLibrary] = useState<LocalPromptLibrary | null>(null);
   const [activeWorkspace, setActiveWorkspace] = useState<PromptWorkspace | null>(null);
   const [workspaces, setWorkspaces] = useState<PromptWorkspace[]>([]);
+  const [teamInvites, setTeamInvites] = useState<TeamInviteSummary[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [activeFolderId, setActiveFolderId] = useState<string>("all");
   const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
   const [draft, setDraft] = useState<PromptDraft>(createEmptyPromptDraft());
   const [newFolderName, setNewFolderName] = useState("");
   const [teamName, setTeamName] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<TeamInviteRole>("member");
+  const [inviteInput, setInviteInput] = useState("");
   const [siteLabel, setSiteLabel] = useState("Checking active tab...");
   const [siteSupported, setSiteSupported] = useState(false);
   const [notice, setNotice] = useState<PopupNotice | null>(null);
@@ -60,6 +66,8 @@ export default function App() {
   const [isBillingSubmitting, setIsBillingSubmitting] = useState(false);
   const [isRefreshingCloud, setIsRefreshingCloud] = useState(false);
   const [isTeamSubmitting, setIsTeamSubmitting] = useState(false);
+  const [isInviteSubmitting, setIsInviteSubmitting] = useState(false);
+  const [isInviteAccepting, setIsInviteAccepting] = useState(false);
   const [page, setPage] = useState<DockPage>(() => getPageFromHash());
   const activeFolderIdRef = useRef(activeFolderId);
   const editingPromptIdRef = useRef(editingPromptId);
@@ -95,6 +103,7 @@ export default function App() {
 
     setLibrary(nextState.library);
     setActiveWorkspace(nextState.activeWorkspace);
+    setTeamInvites(nextState.teamInvites);
     setWorkspaces(nextState.workspaces);
     setCloudConfigured(nextState.cloudConfigured);
     setLibraryMode(nextState.mode);
@@ -439,6 +448,97 @@ export default function App() {
     }
   }
 
+  async function handleCreateInvite(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!activeWorkspace) {
+      return;
+    }
+
+    if (!inviteEmail.trim()) {
+      setNotice({
+        tone: "error",
+        message: "Enter an email before creating the invite.",
+      });
+      return;
+    }
+
+    setIsInviteSubmitting(true);
+
+    try {
+      const result = await createInviteForActiveTeamWorkspace({
+        activeWorkspace,
+        email: inviteEmail,
+        role: inviteRole,
+      });
+
+      setNotice({
+        tone: result.ok ? "success" : "error",
+        message: result.ok
+          ? (await copyInviteToClipboard(result.invite?.inviteUrl ?? null))
+            ? `Invite link copied for ${result.invite?.email}.`
+            : `Invite created for ${result.invite?.email}.`
+          : result.message,
+      });
+
+      if (result.state) {
+        applyPopupLibraryState(result.state);
+        setInviteEmail("");
+      }
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The team invite could not be created.",
+      });
+    } finally {
+      setIsInviteSubmitting(false);
+    }
+  }
+
+  async function handleAcceptInvite(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!inviteInput.trim()) {
+      setNotice({
+        tone: "error",
+        message: "Paste an invite link or token before trying to join a team.",
+      });
+      return;
+    }
+
+    setIsInviteAccepting(true);
+
+    try {
+      const result = await acceptInviteFromInput(inviteInput);
+      setNotice({
+        tone: result.ok ? "success" : "error",
+        message: result.message,
+      });
+
+      if (result.state) {
+        applyPopupLibraryState(result.state);
+        setInviteInput("");
+        navigateToPage("library", setPage);
+      }
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The invite could not be accepted.",
+      });
+    } finally {
+      setIsInviteAccepting(false);
+    }
+  }
+
+  async function handleCopyInviteLink(inviteUrl: string, email: string) {
+    const copied = await copyInviteToClipboard(inviteUrl);
+
+    setNotice({
+      tone: copied ? "success" : "info",
+      message: copied ? `Copied invite link for ${email}.` : `Invite link for ${email}: ${inviteUrl}`,
+    });
+  }
+
   async function refreshCloudStateAfterBillingReturn({
     returnStatus,
     scope,
@@ -779,16 +879,29 @@ export default function App() {
           isAuthSubmitting={isAuthSubmitting}
           isBillingSubmitting={isBillingSubmitting}
           isRefreshingCloud={isRefreshingCloud}
+          isInviteAccepting={isInviteAccepting}
+          isInviteSubmitting={isInviteSubmitting}
           isTeamSubmitting={isTeamSubmitting}
           lastSyncedAt={lastSyncedAt}
           libraryMode={libraryMode}
+          inviteEmail={inviteEmail}
+          inviteInput={inviteInput}
+          inviteRole={inviteRole}
+          activeWorkspace={activeWorkspace}
           teamName={teamName}
+          teamInvites={teamInvites}
           workspaces={workspaces}
           onChangeAuthEmail={setAuthEmail}
           onChangeAuthIntent={setAuthIntent}
           onChangeAuthPassword={setAuthPassword}
           onChangeTeamName={setTeamName}
+          onChangeInviteEmail={setInviteEmail}
+          onChangeInviteInput={setInviteInput}
+          onChangeInviteRole={setInviteRole}
+          onCopyInviteLink={(inviteUrl, email) => void handleCopyInviteLink(inviteUrl, email)}
           onCreateTeam={(event) => void handleCreateTeam(event)}
+          onCreateInvite={(event) => void handleCreateInvite(event)}
+          onAcceptInvite={(event) => void handleAcceptInvite(event)}
           onOpenBillingPortal={() => void handleOpenBillingPortal()}
           onOpenCheckout={() => void handleOpenCheckout()}
           onOpenTeamBillingPortal={(workspace) => void handleOpenTeamBillingPortal(workspace)}
@@ -1022,4 +1135,17 @@ function wait(durationMs: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, durationMs);
   });
+}
+
+async function copyInviteToClipboard(inviteUrl: string | null) {
+  if (!inviteUrl) {
+    return false;
+  }
+
+  try {
+    await navigator.clipboard.writeText(inviteUrl);
+    return true;
+  } catch {
+    return false;
+  }
 }

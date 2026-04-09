@@ -10,6 +10,7 @@ import {
   type RemoteFolderRow,
   type RemotePromptRow,
 } from "./cloud-mappers";
+import { acceptTeamInviteRequest, buildInviteUrl, createTeamInviteRequest, extractInviteToken } from "./invites";
 import {
   createFolder,
   createPromptRecord,
@@ -26,7 +27,16 @@ import {
   updatePromptRecord,
 } from "./storage";
 import { getExtensionSupabaseClient, getSupabaseRuntimeConfig } from "./supabase";
-import type { LocalPromptLibrary, PromptDraft, PromptRecord, PromptWorkspace, TeamRole, WorkspaceMode } from "./types";
+import type {
+  LocalPromptLibrary,
+  PromptDraft,
+  PromptRecord,
+  PromptWorkspace,
+  TeamInviteRole,
+  TeamInviteSummary,
+  TeamRole,
+  WorkspaceMode,
+} from "./types";
 import {
   createEmptyLibrary,
   createTeamSlugCandidate,
@@ -57,6 +67,7 @@ export type PopupLibraryState = {
   library: LocalPromptLibrary;
   mode: WorkspaceMode;
   syncNotice: string | null;
+  teamInvites: TeamInviteSummary[];
   workspaces: PromptWorkspace[];
 };
 
@@ -70,6 +81,14 @@ export type CreateTeamResult = {
   message: string;
   ok: boolean;
   state?: PopupLibraryState;
+};
+
+export type TeamInviteActionResult = {
+  invite?: TeamInviteSummary;
+  message: string;
+  ok: boolean;
+  state?: PopupLibraryState;
+  teamName?: string;
 };
 
 export type SavePromptResult = {
@@ -151,6 +170,7 @@ export async function loadPopupLibraryState(preferredWorkspaceId?: string | null
     cloudContext,
     localLibrary,
   });
+  const teamInvites = await loadActiveTeamInvites(cloudContext.client, activeWorkspace);
 
   return {
     account: cloudContext.summary,
@@ -161,6 +181,7 @@ export async function loadPopupLibraryState(preferredWorkspaceId?: string | null
     library: activeLibraryState.library,
     mode: activeLibraryState.mode,
     syncNotice: activeLibraryState.syncNotice,
+    teamInvites,
     workspaces,
   };
 }
@@ -307,6 +328,58 @@ export async function createTeamWorkspace(name: string): Promise<CreateTeamResul
   return {
     ok: false,
     message: "The team workspace could not be created because a unique slug could not be reserved.",
+  };
+}
+
+export async function createInviteForActiveTeamWorkspace({
+  activeWorkspace,
+  email,
+  role,
+}: {
+  activeWorkspace: PromptWorkspace;
+  email: string;
+  role: TeamInviteRole;
+}): Promise<TeamInviteActionResult> {
+  if (activeWorkspace.kind !== "team" || !activeWorkspace.teamId) {
+    return {
+      ok: false,
+      message: "Switch into a team workspace before creating invites.",
+    };
+  }
+
+  if (activeWorkspace.role !== "owner" && activeWorkspace.role !== "admin") {
+    return {
+      ok: false,
+      message: "Only team owners and admins can invite teammates.",
+    };
+  }
+
+  const invite = await createTeamInviteRequest({
+    email,
+    role,
+    teamId: activeWorkspace.teamId,
+  });
+  const state = await loadPopupLibraryState(activeWorkspace.id);
+
+  return {
+    invite,
+    message: `Invite created for ${invite.email}.`,
+    ok: true,
+    state,
+    teamName: invite.teamName,
+  };
+}
+
+export async function acceptInviteFromInput(inviteInput: string): Promise<TeamInviteActionResult> {
+  const token = extractInviteToken(inviteInput);
+  const result = await acceptTeamInviteRequest(token);
+  const state = await loadPopupLibraryState(getTeamWorkspaceId(result.teamId));
+
+  return {
+    message: `Joined ${result.teamName}.`,
+    ok: true,
+    state,
+    teamName: result.teamName,
   };
 }
 
@@ -777,6 +850,33 @@ async function loadTeamWorkspaces(client: SupabaseClient, userId: string): Promi
   });
 }
 
+async function loadActiveTeamInvites(client: SupabaseClient, activeWorkspace: PromptWorkspace): Promise<TeamInviteSummary[]> {
+  if (!canManageTeamInvites(activeWorkspace) || !activeWorkspace.teamId) {
+    return [];
+  }
+
+  const { data, error } = await client
+    .from("team_invites")
+    .select("id, email, role, token, expires_at, created_at")
+    .eq("team_id", activeWorkspace.teamId)
+    .is("accepted_at", null)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? []).map((invite) => ({
+    createdAt: invite.created_at,
+    email: invite.email,
+    expiresAt: invite.expires_at,
+    id: invite.id,
+    inviteUrl: buildInviteUrl(invite.token),
+    role: invite.role as TeamInviteRole,
+    token: invite.token,
+  }));
+}
+
 async function loadTeamMemberships(client: SupabaseClient, userId: string): Promise<TeamMembershipRecord[]> {
   const { data: membershipRows, error: membershipError } = await client
     .from("team_memberships")
@@ -844,6 +944,10 @@ function shouldPreferTeamLibrary(candidate: TeamLibraryRecord, current: TeamLibr
   }
 
   return Date.parse(candidate.createdAt) < Date.parse(current.createdAt);
+}
+
+function canManageTeamInvites(workspace: PromptWorkspace) {
+  return workspace.kind === "team" && (workspace.role === "owner" || workspace.role === "admin");
 }
 
 async function getCloudLibraryIdForWorkspace(client: SupabaseClient, userId: string, workspace: PromptWorkspace) {
@@ -1055,6 +1159,7 @@ function createLocalOnlyPopupState(
     library,
     mode: "local",
     syncNotice: null,
+    teamInvites: [],
     workspaces: [activeWorkspace],
   };
 }

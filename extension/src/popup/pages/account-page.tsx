@@ -9,6 +9,7 @@ import { ToggleChip } from "../components";
 
 export function AccountPage({
   accountEmail,
+  activeWorkspace,
   activeWorkspaceId,
   authEmail,
   authIntent,
@@ -19,17 +20,29 @@ export function AccountPage({
   cloudConfigured,
   isAuthSubmitting,
   isBillingSubmitting,
+  isInviteAccepting,
+  isInviteSubmitting,
   isRefreshingCloud,
   isTeamSubmitting,
+  inviteEmail,
+  inviteInput,
+  inviteRole,
   lastSyncedAt,
   libraryMode,
   teamName,
+  teamInvites,
   workspaces,
   onChangeAuthEmail,
   onChangeAuthIntent,
   onChangeAuthPassword,
+  onChangeInviteEmail,
+  onChangeInviteInput,
+  onChangeInviteRole,
   onChangeTeamName,
+  onCopyInviteLink,
+  onCreateInvite,
   onCreateTeam,
+  onAcceptInvite,
   onOpenBillingPortal,
   onOpenCheckout,
   onOpenTeamBillingPortal,
@@ -40,6 +53,7 @@ export function AccountPage({
   onSubmitAuth,
 }: {
   accountEmail: string | null;
+  activeWorkspace: PromptWorkspace;
   activeWorkspaceId: string;
   authEmail: string;
   authIntent: "signIn" | "signUp";
@@ -50,17 +64,37 @@ export function AccountPage({
   cloudConfigured: boolean;
   isAuthSubmitting: boolean;
   isBillingSubmitting: boolean;
+  isInviteAccepting: boolean;
+  isInviteSubmitting: boolean;
   isRefreshingCloud: boolean;
   isTeamSubmitting: boolean;
+  inviteEmail: string;
+  inviteInput: string;
+  inviteRole: "admin" | "member";
   lastSyncedAt: string | null;
   libraryMode: "local" | "cloud";
   teamName: string;
+  teamInvites: Array<{
+    createdAt: string;
+    email: string;
+    expiresAt: string;
+    id: string;
+    inviteUrl: string;
+    role: "admin" | "member";
+    token: string;
+  }>;
   workspaces: PromptWorkspace[];
   onChangeAuthEmail: (value: string) => void;
   onChangeAuthIntent: (value: "signIn" | "signUp") => void;
   onChangeAuthPassword: (value: string) => void;
+  onChangeInviteEmail: (value: string) => void;
+  onChangeInviteInput: (value: string) => void;
+  onChangeInviteRole: (value: "admin" | "member") => void;
   onChangeTeamName: (value: string) => void;
+  onCopyInviteLink: (inviteUrl: string, email: string) => void;
+  onCreateInvite: (event: React.FormEvent<HTMLFormElement>) => void;
   onCreateTeam: (event: React.FormEvent<HTMLFormElement>) => void;
+  onAcceptInvite: (event: React.FormEvent<HTMLFormElement>) => void;
   onOpenBillingPortal: () => void;
   onOpenCheckout: () => void;
   onOpenTeamBillingPortal: (workspace: PromptWorkspace) => void;
@@ -73,6 +107,8 @@ export function AccountPage({
   const accountSignedIn = Boolean(accountEmail);
   const hasActivePersonalPlan = billingPlanKey === "individual" && isActiveSubscriptionStatus(billingStatus);
   const teamWorkspaces = workspaces.filter((workspace) => workspace.kind === "team");
+  const canManageActiveTeamInvites =
+    activeWorkspace.kind === "team" && (activeWorkspace.role === "owner" || activeWorkspace.role === "admin");
 
   return (
     <div className="grid gap-4">
@@ -289,6 +325,108 @@ export function AccountPage({
             {!teamWorkspaces.length ? (
               <div className="rounded-[22px] border border-dashed border-slate-300 bg-white px-4 py-4 text-sm leading-6 text-slate-600">
                 No team workspaces yet. Create one here, then switch into it from the library page.
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {accountSignedIn ? (
+        <section className="rounded-[26px] border border-slate-200/70 bg-white/85 p-4 shadow-[0_18px_40px_-34px_rgba(28,42,66,0.4)]">
+          <div className="space-y-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Invites</p>
+              <h2 className="mt-1 text-lg font-semibold">Join or share team workspaces</h2>
+            </div>
+
+            <form className="grid gap-3 rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4" onSubmit={onAcceptInvite}>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Join team</p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Paste the full invite link or just the token from a Prompt Dock team invite.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={inviteInput}
+                  onChange={(event) => onChangeInviteInput(event.target.value)}
+                  placeholder="https://promptdock.example.com/invites/... or token"
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-300"
+                />
+                <button
+                  type="submit"
+                  disabled={isInviteAccepting}
+                  className="rounded-2xl border border-slate-900 bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isInviteAccepting ? "Joining..." : "Join team"}
+                </button>
+              </div>
+            </form>
+
+            {canManageActiveTeamInvites ? (
+              <div className="grid gap-3 rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Invite teammates</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    {activeWorkspace.kind === "team"
+                      ? `Create invites for ${activeWorkspace.label}. Links can be copied now, and email delivery can be added later without changing the flow.`
+                      : "Switch into a team workspace to invite teammates."}
+                  </p>
+                </div>
+
+                <form className="grid gap-3" onSubmit={onCreateInvite}>
+                  <input
+                    value={inviteEmail}
+                    onChange={(event) => onChangeInviteEmail(event.target.value)}
+                    placeholder="teammate@company.com"
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-300"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <ToggleChip active={inviteRole === "member"} label="Member" onClick={() => onChangeInviteRole("member")} />
+                    <ToggleChip active={inviteRole === "admin"} label="Admin" onClick={() => onChangeInviteRole("admin")} />
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={isInviteSubmitting}
+                      className="rounded-2xl border border-slate-900 bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isInviteSubmitting ? "Creating..." : "Create invite"}
+                    </button>
+                  </div>
+                </form>
+
+                <div className="grid gap-2">
+                  {teamInvites.length ? (
+                    teamInvites.map((invite) => (
+                      <div key={invite.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{invite.email}</p>
+                            <p className="mt-1 text-xs leading-5 text-slate-500">
+                              {formatTeamRole(invite.role)} invite. Expires {formatCalendarDate(invite.expiresAt)}.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => onCopyInviteLink(invite.inviteUrl, invite.email)}
+                            className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300"
+                          >
+                            Copy link
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-[22px] border border-dashed border-slate-300 bg-white px-4 py-4 text-sm leading-6 text-slate-600">
+                      No pending invites for this team workspace yet.
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : activeWorkspace.kind === "team" ? (
+              <div className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
+                Only team owners and admins can create invites for {activeWorkspace.label}.
               </div>
             ) : null}
           </div>
