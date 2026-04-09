@@ -10,7 +10,15 @@ export type BillingFlowResult = {
   status: BillingReturnStatus | null;
 };
 
-export async function startBillingFlow(kind: "checkout" | "portal"): Promise<BillingFlowResult> {
+export async function startBillingFlow({
+  kind,
+  scope,
+  teamId,
+}: {
+  kind: "checkout" | "portal";
+  scope: "individual" | "team";
+  teamId?: string | null;
+}): Promise<BillingFlowResult> {
   const client = getExtensionSupabaseClient();
 
   if (!client) {
@@ -25,12 +33,19 @@ export async function startBillingFlow(kind: "checkout" | "portal"): Promise<Bil
     throw new Error("Sign in before opening billing.");
   }
 
-  const endpoint = kind === "checkout" ? "checkout" : "portal";
-  const response = await fetch(`${supportAppRuntimeConfig.url}/api/stripe/${endpoint}`, {
-    method: "POST",
+  const endpoint = resolveBillingEndpoint(scope, kind);
+  const requestBody = scope === "team" ? JSON.stringify({ teamId }) : undefined;
+  const response = await fetch(`${supportAppRuntimeConfig.url}${endpoint}`, {
+    body: requestBody,
     headers: {
       Authorization: `Bearer ${session.access_token}`,
+      ...(scope === "team"
+        ? {
+            "Content-Type": "application/json",
+          }
+        : {}),
     },
+    method: "POST",
   });
   const payload = (await response.json().catch(() => null)) as
     | {
@@ -45,6 +60,14 @@ export async function startBillingFlow(kind: "checkout" | "portal"): Promise<Bil
   }
 
   return openBillingWindow(payload.url);
+}
+
+function resolveBillingEndpoint(scope: "individual" | "team", kind: "checkout" | "portal") {
+  if (scope === "team") {
+    return kind === "checkout" ? "/api/stripe/team/checkout" : "/api/stripe/team/portal";
+  }
+
+  return kind === "checkout" ? "/api/stripe/checkout" : "/api/stripe/portal";
 }
 
 function openBillingWindow(targetUrl: string): Promise<BillingFlowResult> {

@@ -3,10 +3,17 @@ export default async function AuthSupportPage({
 }: {
   searchParams: Promise<{
     flow?: string;
+    scope?: string;
     status?: string;
+    teamId?: string;
   }>;
 }) {
   const resolvedSearchParams = await searchParams;
+  const billingScope =
+    resolvedSearchParams.flow === "billing" &&
+    (resolvedSearchParams.scope === "individual" || resolvedSearchParams.scope === "team")
+      ? resolvedSearchParams.scope
+      : "individual";
   const billingStatus =
     resolvedSearchParams.flow === "billing" &&
     (resolvedSearchParams.status === "success" ||
@@ -23,11 +30,11 @@ export default async function AuthSupportPage({
             {billingStatus ? "Billing return" : "Auth support"}
           </p>
           <h1 className="text-3xl font-semibold tracking-tight">
-            {billingStatus ? getBillingTitle(billingStatus) : "This surface is reserved for extension auth flows."}
+            {billingStatus ? getBillingTitle(billingStatus, billingScope) : "This surface is reserved for extension auth flows."}
           </h1>
           <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
             {billingStatus
-              ? getBillingDescription(billingStatus)
+              ? getBillingDescription(billingStatus, billingScope)
               : "Prompt Dock is extension-first. This page exists so the extension can hand off authentication-related flows to a hosted support surface without turning the web app into the main product."}
           </p>
           {billingStatus ? (
@@ -41,25 +48,32 @@ export default async function AuthSupportPage({
   );
 }
 
-function getBillingTitle(status: "success" | "canceled" | "portal") {
+function getBillingTitle(status: "success" | "canceled" | "portal", scope: "individual" | "team") {
+  const targetLabel = scope === "team" ? "Team checkout" : "Checkout";
+
   if (status === "success") {
-    return "Checkout completed";
+    return `${targetLabel} completed`;
   }
 
   if (status === "canceled") {
-    return "Checkout canceled";
+    return `${targetLabel} canceled`;
   }
 
   return "Billing portal closed";
 }
 
-function getBillingDescription(status: "success" | "canceled" | "portal") {
+function getBillingDescription(status: "success" | "canceled" | "portal", scope: "individual" | "team") {
+  const targetLabel =
+    scope === "team" ? "the selected team workspace" : "your personal workspace";
+
   if (status === "success") {
-    return "Stripe has returned to Prompt Dock after a completed checkout. The extension will refresh your billing status when you return to it.";
+    return `Stripe has returned to Prompt Dock after a completed checkout. The extension will refresh billing for ${targetLabel} when you return to it.`;
   }
 
   if (status === "canceled") {
-    return "No billing changes were applied. Prompt Dock remains available in local mode until an individual plan becomes active.";
+    return scope === "team"
+      ? "No billing changes were applied. The selected team workspace will stay locked until a team plan becomes active."
+      : "No billing changes were applied. Prompt Dock remains available in local mode until an individual plan becomes active.";
   }
 
   return "Any changes made in the Stripe billing portal can now be reloaded in the Prompt Dock extension.";

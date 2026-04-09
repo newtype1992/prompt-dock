@@ -75,8 +75,10 @@ The current codebase now includes:
 - Stripe webhook-backed subscription persistence plus paid personal sync gating
 - Stripe Checkout and Billing Portal launch points from the extension account page
 - local cache fallback for the authenticated personal library
+- team creation plus personal/team workspace switching inside the extension
+- owner-managed Stripe launch points for team billing
 
-Team libraries, invites, and Resend delivery are still planned rather than complete.
+Team invites and Resend delivery are still planned rather than complete.
 
 ## Architecture Summary
 

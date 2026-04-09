@@ -90,6 +90,7 @@ export function FolderChip({
 }
 
 export function PromptCard({
+  actionsDisabled,
   folderName,
   isInjecting,
   isSelected,
@@ -99,6 +100,7 @@ export function PromptCard({
   onEdit,
   onInject,
 }: {
+  actionsDisabled?: boolean;
   folderName: string;
   isInjecting: boolean;
   isSelected: boolean;
@@ -161,14 +163,16 @@ export function PromptCard({
         <button
           type="button"
           onClick={onDuplicate}
-          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300"
+          disabled={actionsDisabled}
+          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
         >
           Duplicate
         </button>
         <button
           type="button"
           onClick={onDelete}
-          className="rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100"
+          disabled={actionsDisabled}
+          className="rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
         >
           Delete
         </button>

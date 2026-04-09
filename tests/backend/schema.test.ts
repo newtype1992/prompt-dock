@@ -43,4 +43,15 @@ describe("Prompt Dock scaffold", () => {
 
     assert.equal(existsSync(migrationPath), true);
   });
+
+  it("includes the team shared-library migration", () => {
+    const migrationPath = resolve(
+      process.cwd(),
+      "supabase",
+      "migrations",
+      "20260407000300_auto_create_team_shared_libraries.sql"
+    );
+
+    assert.equal(existsSync(migrationPath), true);
+  });
 });

@@ -117,6 +117,10 @@ async function upsertStripeSubscription(
       ? subscription.customer
       : subscription.customer?.id ?? existingBinding?.stripe_customer_id ?? null;
 
+  if (targetBinding.scope === "team" && targetBinding.teamId && stripeCustomerId) {
+    await syncTeamStripeCustomerId(admin, targetBinding.teamId, stripeCustomerId);
+  }
+
   const stripePriceId = subscription.items.data[0]?.price?.id ?? null;
   await persistSubscriptionRecord(admin, {
     current_period_end: unixSecondsToIso(getSubscriptionCurrentPeriodEnd(subscription)),
@@ -224,4 +228,21 @@ function getSubscriptionCurrentPeriodEnd(subscription: Stripe.Subscription) {
   return subscription.items.data.reduce((latestPeriodEnd, item) => {
     return Math.max(latestPeriodEnd, item.current_period_end);
   }, 0);
+}
+
+async function syncTeamStripeCustomerId(
+  admin: ReturnType<typeof createAdminClient>,
+  teamId: string,
+  stripeCustomerId: string
+) {
+  const { error } = await admin
+    .from("teams")
+    .update({
+      stripe_customer_id: stripeCustomerId,
+    })
+    .eq("id", teamId);
+
+  if (error) {
+    throw new Error(`Unable to sync the Stripe customer for team ${teamId}: ${error.message}`);
+  }
 }

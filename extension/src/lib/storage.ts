@@ -3,6 +3,7 @@ import type { LocalPromptLibrary, PromptDraft, PromptFolder, PromptRecord } from
 const LOCAL_LIBRARY_KEY = "promptDock.localLibrary.v1";
 const CLOUD_LIBRARY_CACHE_KEY = "promptDock.cloudLibraryCache.v1";
 const CLOUD_SYNC_METADATA_KEY = "promptDock.cloudSyncMetadata.v1";
+const ACTIVE_WORKSPACE_KEY = "promptDock.activeWorkspace.v1";
 
 const DEFAULT_LIBRARY: LocalPromptLibrary = {
   version: 1,
@@ -149,6 +150,27 @@ export async function saveCloudSyncMetadata(userId: string, metadata: CloudSyncM
 
   await chrome.storage.local.set({
     [CLOUD_SYNC_METADATA_KEY]: metadataMap,
+  });
+}
+
+export async function getActiveWorkspacePreference(userId: string) {
+  const stored = await chrome.storage.local.get(ACTIVE_WORKSPACE_KEY);
+  const workspaceMap = stored[ACTIVE_WORKSPACE_KEY] as Record<string, string | null> | undefined;
+  return workspaceMap?.[userId] ?? null;
+}
+
+export async function saveActiveWorkspacePreference(userId: string, workspaceId: string | null) {
+  const stored = await chrome.storage.local.get(ACTIVE_WORKSPACE_KEY);
+  const workspaceMap = (stored[ACTIVE_WORKSPACE_KEY] as Record<string, string | null> | undefined) ?? {};
+
+  if (workspaceId) {
+    workspaceMap[userId] = workspaceId;
+  } else {
+    delete workspaceMap[userId];
+  }
+
+  await chrome.storage.local.set({
+    [ACTIVE_WORKSPACE_KEY]: workspaceMap,
   });
 }
 

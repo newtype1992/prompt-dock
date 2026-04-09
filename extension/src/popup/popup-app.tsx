@@ -8,6 +8,7 @@ import { PRODUCT_NAME } from "@/lib/product/config";
 import { startBillingFlow } from "../lib/billing";
 import {
   createFolderForCurrentMode,
+  createTeamWorkspace,
   deletePromptForCurrentMode,
   duplicatePromptForCurrentMode,
   loadPopupLibraryState,
@@ -16,11 +17,12 @@ import {
   signInWithPassword,
   signOutFromCloud,
   signUpWithPassword,
+  switchWorkspace,
   type PopupLibraryState,
 } from "../lib/cloud-sync";
 import { getActiveSiteSummary, injectPromptFromPopup } from "../lib/injection";
 import { createEmptyPromptDraft, draftFromPrompt } from "../lib/storage";
-import type { LocalPromptLibrary, PromptDraft, PromptRecord } from "../lib/types";
+import type { LocalPromptLibrary, PromptDraft, PromptRecord, PromptWorkspace } from "../lib/types";
 import { NoticeBanner, PageNavButton, type PopupNotice } from "./components";
 import { AccountPage } from "./pages/account-page";
 import { EditorPage } from "./pages/editor-page";
@@ -30,11 +32,14 @@ type DockPage = "library" | "editor" | "account";
 
 export default function App() {
   const [library, setLibrary] = useState<LocalPromptLibrary | null>(null);
+  const [activeWorkspace, setActiveWorkspace] = useState<PromptWorkspace | null>(null);
+  const [workspaces, setWorkspaces] = useState<PromptWorkspace[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [activeFolderId, setActiveFolderId] = useState<string>("all");
   const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
   const [draft, setDraft] = useState<PromptDraft>(createEmptyPromptDraft());
   const [newFolderName, setNewFolderName] = useState("");
+  const [teamName, setTeamName] = useState("");
   const [siteLabel, setSiteLabel] = useState("Checking active tab...");
   const [siteSupported, setSiteSupported] = useState(false);
   const [notice, setNotice] = useState<PopupNotice | null>(null);
@@ -54,6 +59,7 @@ export default function App() {
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [isBillingSubmitting, setIsBillingSubmitting] = useState(false);
   const [isRefreshingCloud, setIsRefreshingCloud] = useState(false);
+  const [isTeamSubmitting, setIsTeamSubmitting] = useState(false);
   const [page, setPage] = useState<DockPage>(() => getPageFromHash());
   const activeFolderIdRef = useRef(activeFolderId);
   const editingPromptIdRef = useRef(editingPromptId);
@@ -88,6 +94,8 @@ export default function App() {
     const currentEditingPromptId = editingPromptIdRef.current;
 
     setLibrary(nextState.library);
+    setActiveWorkspace(nextState.activeWorkspace);
+    setWorkspaces(nextState.workspaces);
     setCloudConfigured(nextState.cloudConfigured);
     setLibraryMode(nextState.mode);
     setLastSyncedAt(nextState.lastSyncedAt);
@@ -119,31 +127,34 @@ export default function App() {
     setDraft(createEmptyPromptDraft(currentActiveFolderId === "all" ? null : currentActiveFolderId));
   }, []);
 
-  const loadPopupData = useCallback(async (preferredPromptId?: string | null) => {
-    setIsLoading(true);
+  const loadPopupData = useCallback(
+    async (preferredPromptId?: string | null) => {
+      setIsLoading(true);
 
-    try {
-      const [nextState, nextSiteSummary] = await Promise.all([loadPopupLibraryState(), getActiveSiteSummary()]);
+      try {
+        const [nextState, nextSiteSummary] = await Promise.all([loadPopupLibraryState(), getActiveSiteSummary()]);
 
-      applyPopupLibraryState(nextState, preferredPromptId);
-      setSiteLabel(nextSiteSummary.label);
-      setSiteSupported(nextSiteSummary.supported);
+        applyPopupLibraryState(nextState, preferredPromptId);
+        setSiteLabel(nextSiteSummary.label);
+        setSiteSupported(nextSiteSummary.supported);
 
-      if (nextState.syncNotice) {
+        if (nextState.syncNotice) {
+          setNotice({
+            tone: "info",
+            message: nextState.syncNotice,
+          });
+        }
+      } catch (error) {
         setNotice({
-          tone: "info",
-          message: nextState.syncNotice,
+          tone: "error",
+          message: error instanceof Error ? error.message : "The side panel could not be loaded.",
         });
+      } finally {
+        setIsLoading(false);
       }
-    } catch (error) {
-      setNotice({
-        tone: "error",
-        message: error instanceof Error ? error.message : "The side panel could not be loaded.",
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [applyPopupLibraryState]);
+    },
+    [applyPopupLibraryState]
+  );
 
   useEffect(() => {
     void loadPopupData();
@@ -156,6 +167,14 @@ export default function App() {
   }
 
   function beginCreatePrompt() {
+    if (activeWorkspace && !activeWorkspace.canEdit) {
+      setNotice({
+        tone: "info",
+        message: getWorkspaceReadOnlyMessage(activeWorkspace),
+      });
+      return;
+    }
+
     setEditingPromptId(null);
     setDraft(createEmptyPromptDraft(activeFolderId === "all" ? null : activeFolderId));
     navigateToPage("editor", setPage);
@@ -218,11 +237,11 @@ export default function App() {
     setIsRefreshingCloud(true);
 
     try {
-      const nextState = await refreshCloudLibrary();
+      const nextState = await refreshCloudLibrary(activeWorkspace?.id);
       applyPopupLibraryState(nextState);
       setNotice({
         tone: "success",
-        message: nextState.mode === "cloud" ? "Cloud library refreshed." : "Local library refreshed.",
+        message: getRefreshMessage(nextState),
       });
     } catch (error) {
       setNotice({
@@ -234,12 +253,73 @@ export default function App() {
     }
   }
 
+  async function handleWorkspaceSwitch(workspaceId: string) {
+    if (!activeWorkspace || workspaceId === activeWorkspace.id) {
+      return;
+    }
+
+    setIsRefreshingCloud(true);
+
+    try {
+      const nextState = await switchWorkspace(workspaceId);
+      applyPopupLibraryState(nextState);
+      setNotice({
+        tone: nextState.activeWorkspace.access === "ready" ? "success" : "info",
+        message: getWorkspaceSwitchMessage(nextState),
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The workspace could not be opened.",
+      });
+    } finally {
+      setIsRefreshingCloud(false);
+    }
+  }
+
+  async function handleCreateTeam(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!teamName.trim()) {
+      setNotice({
+        tone: "error",
+        message: "Enter a team name before creating the workspace.",
+      });
+      return;
+    }
+
+    setIsTeamSubmitting(true);
+
+    try {
+      const result = await createTeamWorkspace(teamName);
+      setNotice({
+        tone: result.ok ? "success" : "error",
+        message: result.message,
+      });
+
+      if (result.state) {
+        applyPopupLibraryState(result.state);
+        setTeamName("");
+        navigateToPage("library", setPage);
+      }
+    } finally {
+      setIsTeamSubmitting(false);
+    }
+  }
+
   async function handleOpenCheckout() {
     setIsBillingSubmitting(true);
 
     try {
-      const flowResult = await startBillingFlow("checkout");
-      const nextState = await refreshCloudStateAfterBillingReturn(flowResult.status);
+      const flowResult = await startBillingFlow({
+        kind: "checkout",
+        scope: "individual",
+      });
+      const nextState = await refreshCloudStateAfterBillingReturn({
+        returnStatus: flowResult.status,
+        scope: "individual",
+        workspaceId: activeWorkspace?.id ?? null,
+      });
       applyPopupLibraryState(nextState);
       setNotice({
         tone: nextState.mode === "cloud" ? "success" : flowResult.status === "canceled" ? "info" : "info",
@@ -259,8 +339,15 @@ export default function App() {
     setIsBillingSubmitting(true);
 
     try {
-      const flowResult = await startBillingFlow("portal");
-      const nextState = await refreshCloudStateAfterBillingReturn(flowResult.status);
+      const flowResult = await startBillingFlow({
+        kind: "portal",
+        scope: "individual",
+      });
+      const nextState = await refreshCloudStateAfterBillingReturn({
+        returnStatus: flowResult.status,
+        scope: "individual",
+        workspaceId: activeWorkspace?.id ?? null,
+      });
       applyPopupLibraryState(nextState);
       setNotice({
         tone: "success",
@@ -281,22 +368,101 @@ export default function App() {
     }
   }
 
-  async function refreshCloudStateAfterBillingReturn(returnStatus: "success" | "canceled" | "portal" | null) {
-    if (returnStatus !== "success") {
-      return refreshCloudLibrary();
+  async function handleOpenTeamCheckout(workspace: PromptWorkspace) {
+    if (workspace.kind !== "team" || !workspace.teamId) {
+      return;
     }
 
-    let latestState = await refreshCloudLibrary();
+    setIsBillingSubmitting(true);
 
-    if (latestState.billing.planKey === "individual" && isActiveSubscriptionStatus(latestState.billing.status)) {
+    try {
+      const flowResult = await startBillingFlow({
+        kind: "checkout",
+        scope: "team",
+        teamId: workspace.teamId,
+      });
+      const nextState = await refreshCloudStateAfterBillingReturn({
+        returnStatus: flowResult.status,
+        scope: "team",
+        workspaceId: workspace.id,
+      });
+      applyPopupLibraryState(nextState);
+      setNotice({
+        tone: nextState.activeWorkspace.access === "ready" ? "success" : flowResult.status === "canceled" ? "info" : "info",
+        message: getTeamBillingNoticeMessage(flowResult.status, nextState, workspace),
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The team upgrade flow could not be started.",
+      });
+    } finally {
+      setIsBillingSubmitting(false);
+    }
+  }
+
+  async function handleOpenTeamBillingPortal(workspace: PromptWorkspace) {
+    if (workspace.kind !== "team" || !workspace.teamId) {
+      return;
+    }
+
+    setIsBillingSubmitting(true);
+
+    try {
+      const flowResult = await startBillingFlow({
+        kind: "portal",
+        scope: "team",
+        teamId: workspace.teamId,
+      });
+      const nextState = await refreshCloudStateAfterBillingReturn({
+        returnStatus: flowResult.status,
+        scope: "team",
+        workspaceId: workspace.id,
+      });
+      applyPopupLibraryState(nextState);
+      setNotice({
+        tone: "success",
+        message:
+          flowResult.status === "portal"
+            ? `${workspace.label} billing settings refreshed.`
+            : nextState.activeWorkspace.access === "ready"
+              ? `${workspace.label} billing is still active.`
+              : `${workspace.label} billing status refreshed.`,
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "The team billing portal could not be opened.",
+      });
+    } finally {
+      setIsBillingSubmitting(false);
+    }
+  }
+
+  async function refreshCloudStateAfterBillingReturn({
+    returnStatus,
+    scope,
+    workspaceId,
+  }: {
+    returnStatus: "success" | "canceled" | "portal" | null;
+    scope: "individual" | "team";
+    workspaceId: string | null;
+  }) {
+    if (returnStatus !== "success") {
+      return refreshCloudLibrary(workspaceId);
+    }
+
+    let latestState = await refreshCloudLibrary(workspaceId);
+
+    if (hasBillingActivatedForScope(scope, workspaceId, latestState)) {
       return latestState;
     }
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await wait(1200);
-      latestState = await refreshCloudLibrary();
+      latestState = await refreshCloudLibrary(workspaceId);
 
-      if (latestState.billing.planKey === "individual" && isActiveSubscriptionStatus(latestState.billing.status)) {
+      if (hasBillingActivatedForScope(scope, workspaceId, latestState)) {
         return latestState;
       }
     }
@@ -307,7 +473,7 @@ export default function App() {
   async function handleSavePrompt(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!library) {
+    if (!library || !activeWorkspace) {
       return;
     }
 
@@ -323,6 +489,7 @@ export default function App() {
 
     try {
       const result = await savePromptForCurrentMode({
+        activeWorkspace,
         currentLibrary: library,
         draft,
         editingPromptId,
@@ -331,14 +498,7 @@ export default function App() {
       applyPopupLibraryState(result.state, result.promptId);
       setNotice({
         tone: "success",
-        message:
-          result.state.mode === "cloud"
-            ? editingPromptId
-              ? "Prompt saved to cloud sync."
-              : "Prompt created in cloud sync."
-            : editingPromptId
-              ? "Prompt updated locally."
-              : "Prompt created locally.",
+        message: getPromptSaveMessage(result.state, editingPromptId),
       });
     } catch (error) {
       setNotice({
@@ -353,7 +513,7 @@ export default function App() {
   async function handleCreateFolder(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!library) {
+    if (!library || !activeWorkspace) {
       return;
     }
 
@@ -384,7 +544,7 @@ export default function App() {
     }
 
     try {
-      const result = await createFolderForCurrentMode(folderName, library);
+      const result = await createFolderForCurrentMode(folderName, library, activeWorkspace);
       const createdFolder =
         result.state.library.folders.find((folder) => folder.name.toLowerCase() === folderName.toLowerCase()) ?? null;
 
@@ -401,8 +561,7 @@ export default function App() {
 
       setNotice({
         tone: "success",
-        message:
-          result.state.mode === "cloud" ? `Folder "${folderName}" created in cloud sync.` : `Folder "${folderName}" created.`,
+        message: getFolderCreateMessage(folderName, result.state),
       });
     } catch (error) {
       setNotice({
@@ -413,7 +572,7 @@ export default function App() {
   }
 
   async function handleDeletePrompt(promptId: string) {
-    if (!library) {
+    if (!library || !activeWorkspace) {
       return;
     }
 
@@ -423,16 +582,16 @@ export default function App() {
       return;
     }
 
-    if (!window.confirm(`Delete "${prompt.title}" from ${libraryMode === "cloud" ? "cloud sync" : "local storage"}?`)) {
+    if (!window.confirm(`Delete "${prompt.title}" from ${getWorkspaceDeleteTarget(activeWorkspace, libraryMode)}?`)) {
       return;
     }
 
     try {
-      const nextState = await deletePromptForCurrentMode(promptId, library);
+      const nextState = await deletePromptForCurrentMode(promptId, library, activeWorkspace);
       applyPopupLibraryState(nextState);
       setNotice({
         tone: "success",
-        message: nextState.mode === "cloud" ? "Prompt deleted from cloud sync." : "Prompt deleted from local storage.",
+        message: getPromptDeleteMessage(nextState),
       });
     } catch (error) {
       setNotice({
@@ -443,7 +602,7 @@ export default function App() {
   }
 
   async function handleDuplicatePrompt(promptId: string) {
-    if (!library) {
+    if (!library || !activeWorkspace) {
       return;
     }
 
@@ -454,12 +613,11 @@ export default function App() {
     }
 
     try {
-      const result = await duplicatePromptForCurrentMode(prompt, library);
+      const result = await duplicatePromptForCurrentMode(prompt, library, activeWorkspace);
       applyPopupLibraryState(result.state, result.promptId);
       setNotice({
         tone: "success",
-        message:
-          result.state.mode === "cloud" ? `Duplicated "${prompt.title}" in cloud sync.` : `Duplicated "${prompt.title}".`,
+        message: getPromptDuplicateMessage(prompt.title, result.state),
       });
     } catch (error) {
       setNotice({
@@ -479,7 +637,7 @@ export default function App() {
     });
   }
 
-  if (isLoading || !library) {
+  if (isLoading || !library || !activeWorkspace) {
     return (
       <div className="flex min-h-screen items-center justify-center p-6 text-sm text-slate-600">
         Loading Prompt Dock...
@@ -511,17 +669,17 @@ export default function App() {
           <div className="space-y-2">
             <div
               className={`inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] ${
-                libraryMode === "cloud"
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : "border-cyan-200 bg-cyan-50 text-cyan-700"
+                getWorkspaceBadgeClass(activeWorkspace, libraryMode)
               }`}
             >
-              {libraryMode === "cloud" ? "Personal cloud sync" : "Free local mode"}
+              {getWorkspaceBadgeLabel(activeWorkspace, libraryMode)}
             </div>
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">{PRODUCT_NAME}</h1>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                Prompt Dock now uses page-based navigation inside the extension side panel.
+                {activeWorkspace.kind === "team"
+                  ? `${activeWorkspace.label} is active in the side panel.`
+                  : "Prompt Dock now uses page-based navigation inside the extension side panel."}
               </p>
             </div>
           </div>
@@ -548,7 +706,7 @@ export default function App() {
         />
         <PageNavButton
           active={page === "editor"}
-          description={editingPromptId ? "Active draft" : "Create prompt"}
+          description={editingPromptId ? "Active draft" : activeWorkspace.canEdit ? "Create prompt" : "View prompt"}
           label="Editor"
           onClick={() => navigateToPage("editor", setPage)}
         />
@@ -563,13 +721,16 @@ export default function App() {
       {page === "library" ? (
         <LibraryPage
           activeFolderId={activeFolderId}
+          activeWorkspace={activeWorkspace}
           injectingPromptId={injectingPromptId}
+          isSwitchingWorkspace={isRefreshingCloud}
           library={library}
           libraryMode={libraryMode}
           newFolderName={newFolderName}
           searchTerm={searchTerm}
           selectedPromptId={editingPromptId}
           visiblePrompts={visiblePrompts}
+          workspaces={workspaces}
           onBeginCreatePrompt={beginCreatePrompt}
           onChangeNewFolderName={setNewFolderName}
           onChangeSearchTerm={setSearchTerm}
@@ -581,11 +742,13 @@ export default function App() {
           onInjectPrompt={(prompt) => void handleInjectPrompt(prompt)}
           onSelectFolder={setActiveFolderId}
           onSelectPrompt={selectPrompt}
+          onSelectWorkspace={(workspaceId) => void handleWorkspaceSwitch(workspaceId)}
         />
       ) : null}
 
       {page === "editor" ? (
         <EditorPage
+          activeWorkspace={activeWorkspace}
           draft={draft}
           editingPromptId={editingPromptId}
           isSaving={isSaving}
@@ -605,6 +768,7 @@ export default function App() {
       {page === "account" ? (
         <AccountPage
           accountEmail={accountEmail}
+          activeWorkspaceId={activeWorkspace.id}
           authEmail={authEmail}
           authIntent={authIntent}
           authPassword={authPassword}
@@ -615,14 +779,22 @@ export default function App() {
           isAuthSubmitting={isAuthSubmitting}
           isBillingSubmitting={isBillingSubmitting}
           isRefreshingCloud={isRefreshingCloud}
+          isTeamSubmitting={isTeamSubmitting}
           lastSyncedAt={lastSyncedAt}
           libraryMode={libraryMode}
+          teamName={teamName}
+          workspaces={workspaces}
           onChangeAuthEmail={setAuthEmail}
           onChangeAuthIntent={setAuthIntent}
           onChangeAuthPassword={setAuthPassword}
+          onChangeTeamName={setTeamName}
+          onCreateTeam={(event) => void handleCreateTeam(event)}
           onOpenBillingPortal={() => void handleOpenBillingPortal()}
           onOpenCheckout={() => void handleOpenCheckout()}
+          onOpenTeamBillingPortal={(workspace) => void handleOpenTeamBillingPortal(workspace)}
+          onOpenTeamCheckout={(workspace) => void handleOpenTeamCheckout(workspace)}
           onRefreshCloud={() => void handleRefreshCloud()}
+          onSelectWorkspace={(workspaceId) => void handleWorkspaceSwitch(workspaceId)}
           onSignOut={() => void handleSignOut()}
           onSubmitAuth={(event) => void handleAuthSubmit(event)}
         />
@@ -701,6 +873,149 @@ function getBillingNoticeMessage(
   }
 
   return "Billing status refreshed.";
+}
+
+function getTeamBillingNoticeMessage(
+  returnStatus: "success" | "canceled" | "portal" | null,
+  nextState: PopupLibraryState,
+  workspace: PromptWorkspace
+) {
+  if (
+    nextState.activeWorkspace.id === workspace.id &&
+    nextState.activeWorkspace.kind === "team" &&
+    nextState.activeWorkspace.access === "ready"
+  ) {
+    return `${workspace.label} billing is active. Shared library access is ready.`;
+  }
+
+  if (returnStatus === "canceled") {
+    return `${workspace.label} checkout was canceled. Team billing is still required.`;
+  }
+
+  if (returnStatus === "success") {
+    return `Checkout completed, but ${workspace.label} is not active yet. Refresh again in a moment if Stripe is still processing.`;
+  }
+
+  return `${workspace.label} billing status refreshed.`;
+}
+
+function getRefreshMessage(state: PopupLibraryState) {
+  if (state.activeWorkspace.kind === "team") {
+    return state.activeWorkspace.access === "ready"
+      ? `${state.activeWorkspace.label} refreshed.`
+      : state.activeWorkspace.accessNotice ?? "Team workspace status refreshed.";
+  }
+
+  return state.mode === "cloud" ? "Cloud library refreshed." : "Local library refreshed.";
+}
+
+function getWorkspaceSwitchMessage(state: PopupLibraryState) {
+  if (state.activeWorkspace.kind === "team" && state.activeWorkspace.access !== "ready") {
+    return state.activeWorkspace.accessNotice ?? `${state.activeWorkspace.label} is waiting on billing.`;
+  }
+
+  return state.activeWorkspace.kind === "team"
+    ? `Switched to ${state.activeWorkspace.label}.`
+    : state.mode === "cloud"
+      ? "Switched to your synced personal library."
+      : "Switched to your local personal library.";
+}
+
+function getPromptSaveMessage(state: PopupLibraryState, editingPromptId: string | null) {
+  if (state.activeWorkspace.kind === "team") {
+    return editingPromptId
+      ? `Prompt updated in ${state.activeWorkspace.label}.`
+      : `Prompt created in ${state.activeWorkspace.label}.`;
+  }
+
+  return state.mode === "cloud"
+    ? editingPromptId
+      ? "Prompt saved to cloud sync."
+      : "Prompt created in cloud sync."
+    : editingPromptId
+      ? "Prompt updated locally."
+      : "Prompt created locally.";
+}
+
+function getFolderCreateMessage(folderName: string, state: PopupLibraryState) {
+  if (state.activeWorkspace.kind === "team") {
+    return `Folder "${folderName}" created in ${state.activeWorkspace.label}.`;
+  }
+
+  return state.mode === "cloud" ? `Folder "${folderName}" created in cloud sync.` : `Folder "${folderName}" created.`;
+}
+
+function getPromptDeleteMessage(state: PopupLibraryState) {
+  if (state.activeWorkspace.kind === "team") {
+    return `Prompt deleted from ${state.activeWorkspace.label}.`;
+  }
+
+  return state.mode === "cloud" ? "Prompt deleted from cloud sync." : "Prompt deleted from local storage.";
+}
+
+function getPromptDuplicateMessage(title: string, state: PopupLibraryState) {
+  if (state.activeWorkspace.kind === "team") {
+    return `Duplicated "${title}" in ${state.activeWorkspace.label}.`;
+  }
+
+  return state.mode === "cloud" ? `Duplicated "${title}" in cloud sync.` : `Duplicated "${title}".`;
+}
+
+function getWorkspaceReadOnlyMessage(workspace: PromptWorkspace) {
+  if (workspace.access !== "ready") {
+    return workspace.accessNotice ?? "This workspace is not available yet.";
+  }
+
+  if (workspace.kind === "team") {
+    return "Team members can use shared prompts, but only owners and admins can edit them.";
+  }
+
+  return "This workspace is read-only right now.";
+}
+
+function getWorkspaceDeleteTarget(workspace: PromptWorkspace, libraryMode: "local" | "cloud") {
+  if (workspace.kind === "team") {
+    return workspace.label;
+  }
+
+  return libraryMode === "cloud" ? "cloud sync" : "local storage";
+}
+
+function getWorkspaceBadgeLabel(workspace: PromptWorkspace, libraryMode: "local" | "cloud") {
+  if (workspace.kind === "team") {
+    return workspace.access === "ready" ? "Shared team library" : "Team billing required";
+  }
+
+  return libraryMode === "cloud" ? "Personal cloud sync" : "Free local mode";
+}
+
+function getWorkspaceBadgeClass(workspace: PromptWorkspace, libraryMode: "local" | "cloud") {
+  if (workspace.kind === "team") {
+    return workspace.access === "ready"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : "border-amber-200 bg-amber-50 text-amber-700";
+  }
+
+  return libraryMode === "cloud"
+    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+    : "border-cyan-200 bg-cyan-50 text-cyan-700";
+}
+
+function hasBillingActivatedForScope(
+  scope: "individual" | "team",
+  workspaceId: string | null,
+  state: PopupLibraryState
+) {
+  if (scope === "individual") {
+    return state.billing.planKey === "individual" && isActiveSubscriptionStatus(state.billing.status);
+  }
+
+  return (
+    Boolean(workspaceId) &&
+    state.activeWorkspace.id === workspaceId &&
+    state.activeWorkspace.kind === "team" &&
+    state.activeWorkspace.access === "ready"
+  );
 }
 
 function wait(durationMs: number) {

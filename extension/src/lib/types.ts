@@ -4,6 +4,14 @@ export type PromptFolder = {
   createdAt: string;
 };
 
+export type TeamRole = "owner" | "admin" | "member";
+
+export type WorkspaceKind = "personal" | "team";
+
+export type WorkspaceMode = "local" | "cloud";
+
+export type WorkspaceAccess = "ready" | "billing_required";
+
 export type PromptRecord = {
   id: string;
   title: string;
@@ -21,6 +29,19 @@ export type LocalPromptLibrary = {
   prompts: PromptRecord[];
 };
 
+export type PromptWorkspace = {
+  access: WorkspaceAccess;
+  accessNotice: string | null;
+  canEdit: boolean;
+  id: string;
+  kind: WorkspaceKind;
+  label: string;
+  libraryId: string | null;
+  mode: WorkspaceMode;
+  role: TeamRole | null;
+  teamId: string | null;
+};
+
 export type PromptDraft = {
   title: string;
   description: string;
@@ -28,4 +49,3 @@ export type PromptDraft = {
   tagsInput: string;
   folderId: string | null;
 };
-
