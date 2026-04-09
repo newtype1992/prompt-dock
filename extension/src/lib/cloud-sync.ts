@@ -32,6 +32,7 @@ import type {
   PromptDraft,
   PromptRecord,
   PromptWorkspace,
+  TeamInviteDelivery,
   TeamInviteRole,
   TeamInviteSummary,
   TeamRole,
@@ -84,6 +85,7 @@ export type CreateTeamResult = {
 };
 
 export type TeamInviteActionResult = {
+  delivery?: TeamInviteDelivery;
   invite?: TeamInviteSummary;
   message: string;
   ok: boolean;
@@ -362,11 +364,12 @@ export async function createInviteForActiveTeamWorkspace({
   const state = await loadPopupLibraryState(activeWorkspace.id);
 
   return {
-    invite,
-    message: `Invite created for ${invite.email}.`,
+    delivery: invite.delivery,
+    invite: invite.invite,
+    message: getInviteCreationMessage(invite.invite.email, invite.delivery),
     ok: true,
     state,
-    teamName: invite.teamName,
+    teamName: invite.invite.teamName,
   };
 }
 
@@ -1176,4 +1179,16 @@ function assertWorkspaceCanManage(workspace: PromptWorkspace) {
 
 function isUniqueConstraintError(error: { code?: string; message?: string } | null) {
   return error?.code === "23505";
+}
+
+function getInviteCreationMessage(email: string, delivery: TeamInviteDelivery) {
+  if (delivery.status === "sent") {
+    return `Invite emailed to ${email}.`;
+  }
+
+  if (delivery.status === "failed") {
+    return `Invite created for ${email}, but email delivery failed. Share the link manually.`;
+  }
+
+  return `Invite created for ${email}. Email delivery is not configured, so share the link manually.`;
 }

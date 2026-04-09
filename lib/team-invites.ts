@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { sendTeamInviteAcceptedEmail, sendTeamInviteEmail, type EmailDeliveryResult } from "@/lib/email/transactional";
 
 export type TeamInviteRole = "admin" | "member";
 type TeamRole = "owner" | "admin" | "member";
@@ -11,6 +12,7 @@ export type TeamInviteRecord = {
   expiresAt: string;
   id: string;
   inviteUrl: string;
+  invitedByUserId?: string | null;
   role: TeamInviteRole;
   teamId: string;
   teamName: string;
@@ -18,9 +20,15 @@ export type TeamInviteRecord = {
 };
 
 export type TeamInviteAcceptanceResult = {
+  notification: EmailDeliveryResult | null;
   role: TeamRole;
   teamId: string;
   teamName: string;
+};
+
+export type CreateTeamInviteResult = {
+  delivery: EmailDeliveryResult;
+  invite: TeamInviteRecord;
 };
 
 const INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
@@ -28,16 +36,18 @@ const INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 export async function createTeamInvite({
   appOrigin,
   email,
+  inviterEmail,
   role,
   teamId,
   userId,
 }: {
   appOrigin: string;
   email: string;
+  inviterEmail: string | null;
   role: string;
   teamId: string;
   userId: string;
-}): Promise<TeamInviteRecord> {
+}): Promise<CreateTeamInviteResult> {
   const admin = createAdminClient();
   const normalizedEmail = normalizeInviteEmail(email);
   const normalizedRole = normalizeTeamInviteRole(role);
@@ -77,17 +87,33 @@ export async function createTeamInvite({
     inviteId = data.id;
   }
 
-  return {
+  const invite = {
     acceptedAt: null,
     createdAt: existingInvite?.created_at ?? new Date().toISOString(),
     email: normalizedEmail,
     expiresAt,
     id: inviteId ?? createInviteToken(),
     inviteUrl: buildInviteUrl(appOrigin, token),
+    invitedByUserId: userId,
     role: normalizedRole,
     teamId,
     teamName: team.name,
     token,
+  };
+
+  const delivery = await sendTeamInviteEmail({
+    expiresAt,
+    inviteUrl: invite.inviteUrl,
+    inviteeEmail: normalizedEmail,
+    inviterEmail,
+    role: normalizedRole,
+    teamName: team.name,
+    token,
+  });
+
+  return {
+    delivery,
+    invite,
   };
 }
 
@@ -155,7 +181,30 @@ export async function acceptTeamInvite({
     throw new Error(`Unable to mark the invite as accepted: ${inviteError.message}`);
   }
 
+  let notification: EmailDeliveryResult | null = null;
+
+  try {
+    const inviterEmail = invite.invitedByUserId ? await findProfileEmailById(admin, invite.invitedByUserId) : null;
+
+    if (normalizedUserEmail && inviterEmail) {
+      notification = await sendTeamInviteAcceptedEmail({
+        acceptedEmail: normalizedUserEmail,
+        inviterEmail,
+        role: nextRole,
+        teamName: invite.teamName,
+      });
+    }
+  } catch (error) {
+    console.error("Invite acceptance notification failed", error);
+    notification = {
+      message: "Invite acceptance notification failed.",
+      providerMessageId: null,
+      status: "failed",
+    };
+  }
+
   return {
+    notification,
     role: nextRole,
     teamId: invite.teamId,
     teamName: invite.teamName,
@@ -167,7 +216,7 @@ export async function getTeamInviteByToken(token: string): Promise<TeamInviteRec
   const normalizedToken = normalizeInviteToken(token);
   const { data, error } = await admin
     .from("team_invites")
-    .select("id, team_id, email, role, token, accepted_at, expires_at, created_at")
+    .select("id, team_id, email, role, token, invited_by_user_id, accepted_at, expires_at, created_at")
     .eq("token", normalizedToken)
     .limit(1)
     .maybeSingle<{
@@ -176,6 +225,7 @@ export async function getTeamInviteByToken(token: string): Promise<TeamInviteRec
       email: string;
       expires_at: string;
       id: string;
+      invited_by_user_id: string | null;
       role: TeamInviteRole;
       team_id: string;
       token: string;
@@ -198,6 +248,7 @@ export async function getTeamInviteByToken(token: string): Promise<TeamInviteRec
     expiresAt: data.expires_at,
     id: data.id,
     inviteUrl: buildInviteUrl(process.env.NEXT_PUBLIC_APP_URL?.trim() ?? process.env.APP_URL?.trim() ?? "http://localhost:3000", data.token),
+    invitedByUserId: data.invited_by_user_id,
     role: data.role,
     teamId: data.team_id,
     teamName: team.name,
@@ -294,6 +345,21 @@ async function findExistingTeamMembership(
   }
 
   return data ?? null;
+}
+
+async function findProfileEmailById(admin: ReturnType<typeof createAdminClient>, userId: string) {
+  const { data, error } = await admin
+    .from("profiles")
+    .select("email")
+    .eq("id", userId)
+    .limit(1)
+    .maybeSingle<{ email: string }>();
+
+  if (error) {
+    throw new Error(`Unable to load the inviter profile: ${error.message}`);
+  }
+
+  return data?.email ?? null;
 }
 
 async function loadTeamSummary(admin: ReturnType<typeof createAdminClient>, teamId: string) {

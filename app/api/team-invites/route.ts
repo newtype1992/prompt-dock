@@ -34,13 +34,15 @@ export async function POST(request: Request) {
     const invite = await createTeamInvite({
       appOrigin: new URL(request.url).origin,
       email,
+      inviterEmail: user.email ?? null,
       role,
       teamId,
       userId: user.id,
     });
 
     return NextResponse.json({
-      invite,
+      delivery: invite.delivery,
+      invite: invite.invite,
       ok: true,
     });
   } catch (error) {

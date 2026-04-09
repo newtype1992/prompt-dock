@@ -79,8 +79,7 @@ The current codebase now includes:
 - owner-managed Stripe launch points for team billing
 - team invite creation in the extension plus invite acceptance by link or token
 - hosted invite pages that resolve real invite details and hand users into the extension flow
-
-Resend delivery for invites and account notifications is still planned rather than complete.
+- Resend-backed invite email delivery plus inviter notifications when invites are accepted
 
 ## Architecture Summary
 

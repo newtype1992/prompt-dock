@@ -471,13 +471,12 @@ export default function App() {
         email: inviteEmail,
         role: inviteRole,
       });
+      const copiedInvite = result.delivery?.status === "sent" ? false : await copyInviteToClipboard(result.invite?.inviteUrl ?? null);
 
       setNotice({
         tone: result.ok ? "success" : "error",
         message: result.ok
-          ? (await copyInviteToClipboard(result.invite?.inviteUrl ?? null))
-            ? `Invite link copied for ${result.invite?.email}.`
-            : `Invite created for ${result.invite?.email}.`
+          ? getInviteNoticeMessage(result, copiedInvite)
           : result.message,
       });
 
@@ -1148,4 +1147,31 @@ async function copyInviteToClipboard(inviteUrl: string | null) {
   } catch {
     return false;
   }
+}
+
+function getInviteNoticeMessage(
+  result: {
+    delivery?: {
+      status: "sent" | "disabled" | "failed";
+    };
+    invite?: {
+      email: string;
+    };
+    message: string;
+  },
+  copiedInvite: boolean
+) {
+  if (!result.delivery || result.delivery.status === "sent") {
+    return result.message;
+  }
+
+  const email = result.invite?.email ?? "the teammate";
+
+  if (result.delivery.status === "failed") {
+    return copiedInvite
+      ? `Invite created for ${email}, but email delivery failed. The link was copied for manual sharing.`
+      : result.message;
+  }
+
+  return copiedInvite ? `Invite created for ${email}. Email is not configured, so the link was copied.` : result.message;
 }

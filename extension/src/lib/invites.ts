@@ -1,6 +1,6 @@
 import { resolveSupportAppRuntimeConfig } from "./runtime-config";
 import { getExtensionSupabaseClient } from "./supabase";
-import type { TeamInviteRole, TeamInviteSummary } from "./types";
+import type { TeamInviteDelivery, TeamInviteRole, TeamInviteSummary } from "./types";
 
 const supportAppRuntimeConfig = resolveSupportAppRuntimeConfig(getRuntimeEnv());
 
@@ -20,6 +20,7 @@ export async function createTeamInviteRequest({
   teamId: string;
 }) {
   const payload = await callSupportApp<{
+    delivery: TeamInviteDelivery;
     invite: TeamInviteSummary & {
       teamId: string;
       teamName: string;
@@ -37,7 +38,10 @@ export async function createTeamInviteRequest({
     method: "POST",
   });
 
-  return payload.invite;
+  return {
+    delivery: payload.delivery,
+    invite: payload.invite,
+  };
 }
 
 export async function acceptTeamInviteRequest(token: string) {

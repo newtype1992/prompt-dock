@@ -302,7 +302,7 @@ export function AccountPage({
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Create team</p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Create the team shell now. Team billing and invite delivery are the next slice after this shared-library switcher.
+                  Create a shared team workspace and manage billing, membership, and invite flows from the extension.
                 </p>
               </div>
               <div className="flex gap-2">
@@ -369,7 +369,7 @@ export function AccountPage({
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Invite teammates</p>
                   <p className="mt-2 text-sm leading-6 text-slate-600">
                     {activeWorkspace.kind === "team"
-                      ? `Create invites for ${activeWorkspace.label}. Links can be copied now, and email delivery can be added later without changing the flow.`
+                      ? `Create invites for ${activeWorkspace.label}. Prompt Dock emails invite links when Resend is configured and still lets you copy links manually.`
                       : "Switch into a team workspace to invite teammates."}
                   </p>
                 </div>

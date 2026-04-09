@@ -54,6 +54,12 @@ export type TeamInviteSummary = {
   token: string;
 };
 
+export type TeamInviteDelivery = {
+  message: string;
+  providerMessageId: string | null;
+  status: "sent" | "disabled" | "failed";
+};
+
 export type PromptDraft = {
   title: string;
   description: string;
