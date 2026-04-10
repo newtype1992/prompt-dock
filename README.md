@@ -80,6 +80,10 @@ The current codebase now includes:
 - team invite creation in the extension plus invite acceptance by link or token
 - hosted invite pages that resolve real invite details and hand users into the extension flow
 - Resend-backed invite email delivery plus inviter notifications when invites are accepted
+- retry-backed site-specific injection ranking for ChatGPT, Claude, Gemini, and Perplexity
+- drag a prompt from the side panel and drop it into supported AI text fields
+
+Next up: run an end-to-end smoke test across the live supported AI surfaces and the hosted billing/invite flows.
 
 ## Architecture Summary
 

@@ -1,4 +1,5 @@
 import type { PromptRecord } from "../lib/types";
+import { createPromptDragPayload, PROMPT_DOCK_DRAG_MIME } from "../lib/drag";
 
 export type PopupNotice = {
   tone: "success" | "info" | "error";
@@ -110,6 +111,18 @@ export function PromptCard({
   onEdit: () => void;
   onInject: () => void;
 }) {
+  function handleDragStart(event: React.DragEvent<HTMLDivElement>) {
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(
+      PROMPT_DOCK_DRAG_MIME,
+      createPromptDragPayload({
+        promptText: prompt.body,
+        title: prompt.title,
+      })
+    );
+    event.dataTransfer.setData("text/plain", prompt.body);
+  }
+
   return (
     <article
       className={`rounded-[24px] border p-4 transition ${
@@ -121,14 +134,24 @@ export function PromptCard({
           <h3 className="text-sm font-semibold text-slate-900">{prompt.title}</h3>
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">{folderName}</p>
         </div>
-        <button
-          type="button"
-          onClick={onInject}
-          disabled={isInjecting}
-          className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-semibold text-cyan-700 transition hover:border-cyan-300 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isInjecting ? "Using..." : "Use"}
-        </button>
+        <div className="flex items-center gap-2">
+          <div
+            draggable
+            onDragStart={handleDragStart}
+            title="Drag this prompt into the active AI composer"
+            className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300 cursor-grab active:cursor-grabbing"
+          >
+            Drag to page
+          </div>
+          <button
+            type="button"
+            onClick={onInject}
+            disabled={isInjecting}
+            className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-semibold text-cyan-700 transition hover:border-cyan-300 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isInjecting ? "Using..." : "Use"}
+          </button>
+        </div>
       </div>
 
       <p className="mt-3 text-sm leading-6 text-slate-600">
@@ -177,6 +200,10 @@ export function PromptCard({
           Delete
         </button>
       </div>
+
+      <p className="mt-3 text-xs leading-5 text-slate-500">
+        Drag this prompt onto a supported AI composer to drop it into the text field, or use one-click insert.
+      </p>
     </article>
   );
 }
