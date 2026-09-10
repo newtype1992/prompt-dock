@@ -12,9 +12,13 @@ This repository is being used to build the production MVP. The docs in this repo
 
 The prompt library and editor, shown in free local mode with the built-in sample prompts. Captured from a browser preview of the extension's actual side-panel UI; extension storage is simulated for the preview, and no live account or AI-site connection is used.
 
-| Prompt library | Prompt editor |
-| --- | --- |
-| <img src="./docs/images/prompt-library.png" width="360" alt="Prompt Dock library with folders, search, and three built-in sample prompts." /> | <img src="./docs/images/prompt-editor.png" width="360" alt="Prompt Dock editor showing the Research Brief sample prompt with its folder, tags, and body." /> |
+<table>
+  <tr><th>Prompt library</th><th>Prompt editor</th></tr>
+  <tr>
+    <td valign="top"><img src="./docs/images/prompt-library.png" width="360" alt="Prompt Dock library with folders, search, and three built-in sample prompts." /></td>
+    <td valign="top"><img src="./docs/images/prompt-editor.png" width="360" alt="Prompt Dock editor showing the Research Brief sample prompt with its folder, tags, and body." /></td>
+  </tr>
+</table>
 
 ## Product Direction
 
