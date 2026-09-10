@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./docs/images/newtype-readme-header.svg" width="1200" alt="Prompt Dock — animated pixel prompt moving from a library into an AI input." />
+</p>
+
 # Prompt Dock
 
 Prompt Dock is an extension-first SaaS for saving, organizing, and injecting reusable AI prompts into the tools people already use. The first build targets ChatGPT, Claude, Gemini, and Perplexity, with a Chromium browser extension as the primary product surface.
