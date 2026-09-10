@@ -8,6 +8,14 @@ Prompt Dock is an extension-first SaaS for saving, organizing, and injecting reu
 
 This repository is being used to build the production MVP. The docs in this repo define what we are building, the stack we are using, and the constraints the implementation should follow.
 
+## Screenshots
+
+The prompt library and editor, shown in free local mode with the built-in sample prompts. Captured from a browser preview of the extension's actual side-panel UI; extension storage is simulated for the preview, and no live account or AI-site connection is used.
+
+| Prompt library | Prompt editor |
+| --- | --- |
+| <img src="./docs/images/prompt-library.png" width="360" alt="Prompt Dock library with folders, search, and three built-in sample prompts." /> | <img src="./docs/images/prompt-editor.png" width="360" alt="Prompt Dock editor showing the Research Brief sample prompt with its folder, tags, and body." /> |
+
 ## Product Direction
 
 - Extension first. The main user experience lives inside the browser extension.
